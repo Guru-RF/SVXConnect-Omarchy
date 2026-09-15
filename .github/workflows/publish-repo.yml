@@ -1,0 +1,78 @@
+# Publish a release's Arch packages to repo.rf.guru.
+#
+# When a release is published, its .pkg.tar.zst files (debug packages excepted)
+# are uploaded to the repo server and published into the Arch repository
+# "guru". The server signs the packages and the database itself; see
+# Guru-RF/arch-repo. A release must be published WITH its packages attached —
+# `gh release create <tag> <files...>` uploads them before it publishes.
+#
+# To publish an existing release by hand:
+#   gh workflow run publish-repo.yml -R Guru-RF/SVXConnect-Omarchy -f tag=v0.1.0
+name: publish-repo
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish
+        required: true
+
+# One publish at a time, so two releases cannot interleave their uploads.
+concurrency:
+  group: publish-repo
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the release's packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.pkg.tar.zst' --dir pkgs
+          find pkgs -name '*-debug-*.pkg.tar.zst' -delete
+          if ! ls pkgs/*.pkg.tar.zst >/dev/null 2>&1; then
+            echo "::error::release $TAG has no .pkg.tar.zst attached"
+            exit 1
+          fi
+          ls -l pkgs
+
+      - name: Upload and publish to repo.rf.guru
+        env:
+          # The private half of arch-repo/keys/github-actions.pub. The server
+          # locks that key to upload / publish / list / remove.
+          REPO_UPLOAD_KEY: ${{ secrets.REPO_UPLOAD_KEY }}
+        run: |
+          if [ -z "$REPO_UPLOAD_KEY" ]; then
+            echo "::error::secret REPO_UPLOAD_KEY is not set"
+            exit 1
+          fi
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$REPO_UPLOAD_KEY" > "$HOME/.ssh/repo-upload"
+          chmod 600 "$HOME/.ssh/repo-upload"
+
+          # Pinned, so a runner never trusts whatever answers on first contact.
+          # Update these if the VM is ever recreated with new host keys.
+          cat > "$HOME/.ssh/known_hosts" <<'EOF'
+          repo.rf.guru ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINTlW5a+KMN4gSBOc5yMOMNdPLi/PmtL+Uz6uuCiAFws
+          repo.rf.guru ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBNPOTtix7w4SDDnXqQWTNsgwd6YUnPCZxt0BCNlxJk14Cy14tELTmjhZaM/8l+MbIfpT/wjaECF8IO/YARkABFI=
+          repo.rf.guru ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC3jzlumXwb8kzCxkH/GYDEx8U7rgCG//uXrWY7j7w068t+oyrVSEzJI+F9Xw1odcZhhHbscn7nx4ff+Z/PNWraqg/FLm4LgXLtUqnoDu6CN7vB1+5JOCortAUH8ePagngv6/CyKP8CPNymlRAVmJ0bXQ6dttXpo6WE3OcKFnjAE7rCh+35QIXfDc4xPzuJpeFzzlaJ5TRhadm13F5qCikLJO21dt1uOXkIwczib9b9Y2XWcBNBZP8QbAoNR2r4F96rnGFtKIh4wHWSF4neFnU03JF9ePKG97xY2acl6grpTtU5fGvanZ+RES5amnXWYOYgLfV0bM3xFMxUYGYM3U5O732+jREw+zGa40PpFZeAtBOVMd5ObdNZlQs1MapOasx9Ht7DpUGLTwIbjZRRABa1HtgvAK7EWovXEEDCKmSGZnj/YS+i49DZi3v4D0vmlHYHN6hn6S7ya4JyxrEsSLZHM41eXIY6HPcn+hAKw8mBympNHUMMOCHeM/QwGRHP9WE=
+          EOF
+          sed -i 's/^ *//' "$HOME/.ssh/known_hosts"
+
+          # Same steps as arch-repo's bin/repo-upload: rsync into a unique batch,
+          # then publish it, over one shared SSH connection.
+          target=repo@repo.rf.guru
+          batch="$(date +%Y%m%d%H%M%S)-gha-$GITHUB_RUN_ID"
+          ssh_opts=(-i "$HOME/.ssh/repo-upload" -o IdentitiesOnly=yes -o BatchMode=yes
+                    -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+                    -o ControlMaster=auto -o ControlPath="$HOME/.ssh/cm-%C" -o ControlPersist=60)
+          trap 'ssh "${ssh_opts[@]}" -O exit "$target" 2>/dev/null || true' EXIT
+
+          rsync --times --chmod=F644 -e "ssh ${ssh_opts[*]}" -- pkgs/*.pkg.tar.zst "$target:arch/$batch/"
+          ssh "${ssh_opts[@]}" "$target" publish arch guru "$batch"

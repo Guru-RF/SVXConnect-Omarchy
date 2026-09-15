@@ -108,6 +108,33 @@ Every way below installs two packages. `svxconnect-omarchy` is the desktop app,
 with its launcher entry. `svxconnect` is the terminal client, which you use once
 to create the configuration and enrol.
 
+### From repo.rf.guru (recommended)
+
+RF.Guru's own signed package repository. Once it's set up, updates arrive with
+your normal system update.
+
+Trust the repository's signing key once:
+
+```sh
+curl -fsSLO https://repo.rf.guru/repo-key.asc
+sudo pacman-key --add repo-key.asc
+sudo pacman-key --lsign-key 878DC4CB2070252EFC08E2AEAFD96E81AB70B5CA
+```
+
+Add the repository to the end of `/etc/pacman.conf`:
+
+```ini
+[guru]
+SigLevel = Required
+Server = https://repo.rf.guru/arch/$repo/os/$arch
+```
+
+Then install:
+
+```sh
+sudo pacman -Sy svxconnect-omarchy
+```
+
 ### From the AUR
 
 ```sh
