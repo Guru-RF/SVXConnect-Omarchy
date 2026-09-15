@@ -1,0 +1,15 @@
+build/
+build-*/
+.cache/
+compile_commands.json
+*.user
+*.autosave
+.qt/
+CMakeLists.txt.user*
+
+# makepkg output under packaging/aur
+packaging/aur/*/src/
+packaging/aur/*/pkg/
+packaging/aur/*/*.tar.gz
+*.pkg.tar.*
+*.src.tar.*

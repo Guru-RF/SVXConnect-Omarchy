@@ -1,0 +1,52 @@
+# Maintainer: Joeri Van Dooren <ure@on6ure.be>
+#
+# The terminal client for SvxLink reflectors, and the tool SVXConnect for
+# Omarchy relies on to write the first configuration (`--init-config`) and to
+# enrol the client certificate (`--enroll`).
+
+pkgname=svxconnect
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Terminal client for SvxLink reflectors (mTLS, AES-GCM, Opus)"
+arch=(x86_64 aarch64)
+url="https://github.com/Guru-RF/SVXConnect-CLI"
+license=(MIT)
+# miniaudio dlopen()s libpulse (PipeWire's pipewire-pulse on Omarchy) or
+# alsa-lib at runtime, so no dependency scan can see them: named here.
+depends=(glibc openssl opus ncurses libpulse)
+optdepends=('alsa-lib: audio without PulseAudio or PipeWire')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "SVXConnect-CLI-$pkgver"
+    make PREFIX=/usr
+}
+
+check() {
+    cd "SVXConnect-CLI-$pkgver"
+    make test
+}
+
+package() {
+    cd "SVXConnect-CLI-$pkgver"
+    make PREFIX=/usr DESTDIR="$pkgdir" install
+
+    install -Dm644 debian/svxconnect.1 "$pkgdir/usr/share/man/man1/svxconnect.1"
+    install -Dm644 example.conf "$pkgdir/usr/share/svxconnect/example.conf"
+    # The headless unit (see DEPLOY.md): the binary is in /usr/bin here, not
+    # /usr/local/bin, and the service user it runs as comes from sysusers.d
+    # rather than a manual useradd.
+    sed 's|/usr/local/bin/svxconnect|/usr/bin/svxconnect|' packaging/systemd/svxconnect@.service |
+        install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/svxconnect@.service"
+    printf '%s\n' \
+        'u svxconnect - "SVXConnect reflector node" /var/lib/svxconnect' \
+        'm svxconnect audio' |
+        install -Dm644 /dev/stdin "$pkgdir/usr/lib/sysusers.d/$pkgname.conf"
+    printf '%s\n' \
+        'd /var/lib/svxconnect      0750 svxconnect svxconnect -' \
+        'd /var/lib/svxconnect/pki  0700 svxconnect svxconnect -' |
+        install -Dm644 /dev/stdin "$pkgdir/usr/lib/tmpfiles.d/$pkgname.conf"
+    install -Dm644 README.md DEPLOY.md docs/PTT.md -t "$pkgdir/usr/share/doc/$pkgname"
+    install -Dm644 LICENSE THIRD-PARTY-NOTICES -t "$pkgdir/usr/share/licenses/$pkgname"
+}

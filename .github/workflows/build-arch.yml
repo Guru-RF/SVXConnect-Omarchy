@@ -1,0 +1,46 @@
+# Build and test on Arch Linux, the base Omarchy runs on.
+#
+# Every push and pull request is built inside an archlinux container, the unit
+# tests are run, and the linked binary is checked for GPL-only Qt modules.
+#
+# Release packages are built from packaging/aur/ against the published tag
+# tarballs, whose checksums only exist once the tag does — so that happens
+# after tagging, not here.
+name: build-arch
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+              git cmake qt6-base qt6-svg qt6-wayland opus openssl ncurses
+
+      - uses: actions/checkout@v4
+        with:
+          # The C core is a submodule and the build refuses to run without it.
+          submodules: recursive
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Licence guard
+        run: tools/licence_guard.sh build/svxconnect-omarchy

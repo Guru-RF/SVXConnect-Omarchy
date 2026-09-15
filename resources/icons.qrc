@@ -1,0 +1,19 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/icons">
+    <!-- Purpose-made at each size: a 16 px title-bar icon downscaled from
+         1024 px is visibly worse than one rendered for 16 px. The large end
+         matters too — task switchers and window previews on a HiDPI screen
+         ask for far more than 256. -->
+    <file alias="app-16.png">../data/hicolor/16x16/apps/SVXConnect.png</file>
+    <file alias="app-22.png">../data/hicolor/22x22/apps/SVXConnect.png</file>
+    <file alias="app-24.png">../data/hicolor/24x24/apps/SVXConnect.png</file>
+    <file alias="app-32.png">../data/hicolor/32x32/apps/SVXConnect.png</file>
+    <file alias="app-48.png">../data/hicolor/48x48/apps/SVXConnect.png</file>
+    <file alias="app-64.png">../data/hicolor/64x64/apps/SVXConnect.png</file>
+    <file alias="app-128.png">../data/hicolor/128x128/apps/SVXConnect.png</file>
+    <file alias="app-256.png">../data/hicolor/256x256/apps/SVXConnect.png</file>
+    <file alias="app-512.png">../data/hicolor/512x512/apps/SVXConnect.png</file>
+    <file alias="app-1024.png">../data/hicolor/1024x1024/apps/SVXConnect.png</file>
+  </qresource>
+</RCC>

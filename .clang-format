@@ -1,0 +1,9 @@
+# Matches the SVXConnect-CLI house style: LLVM base, 4-space, 100 columns.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AlwaysBreakTemplateDeclarations: Yes
+PointerAlignment: Right
+SortIncludes: false

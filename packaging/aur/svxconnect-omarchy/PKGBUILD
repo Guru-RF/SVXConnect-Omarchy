@@ -1,0 +1,49 @@
+# Maintainer: Joeri Van Dooren <ure@on6ure.be>
+#
+# SVXConnect for Omarchy: a desktop client for SvxLink reflectors that follows
+# the Omarchy theme and takes push-to-talk through Hyprland.
+
+pkgname=svxconnect-omarchy
+pkgver=0.1.0
+pkgrel=1
+# The SVXConnect-CLI release the app's core is built from — the commit
+# third_party/svxconnect-cli is pinned to in this release.
+_cliver=0.1.1
+pkgdesc="SvxLink reflector client for Omarchy, with Hyprland push-to-talk"
+arch=(x86_64 aarch64)
+url="https://github.com/Guru-RF/SVXConnect-Omarchy"
+license=(MIT)
+# svxconnect writes the configuration and enrols; the app cannot do either.
+# libpulse is dlopen()ed at runtime by miniaudio, so it is named by hand.
+depends=("svxconnect>=$_cliver" qt6-base qt6-svg qt6-wayland openssl opus libpulse
+         hicolor-icon-theme xdg-desktop-portal)
+makedepends=(cmake)
+optdepends=('xdg-desktop-portal-hyprland: global push-to-talk on Hyprland'
+            'alsa-lib: audio without PulseAudio or PipeWire')
+# GitHub's tag archives leave submodules empty, so the reflector core is
+# fetched as its own tarball and handed to CMake with CLI_DIR.
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+        "svxconnect-cli-$_cliver.tar.gz::https://github.com/Guru-RF/SVXConnect-CLI/archive/refs/tags/v$_cliver.tar.gz")
+sha256sums=('SKIP'
+            'SKIP')
+
+build() {
+    cmake -B build -S "SVXConnect-Omarchy-$pkgver" \
+        -DCLI_DIR="$srcdir/SVXConnect-CLI-$_cliver" \
+        -DCMAKE_BUILD_TYPE=None \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DSVXCONNECT_VERSION_OVERRIDE="$pkgver" \
+        -Wno-dev
+    cmake --build build
+}
+
+check() {
+    ctest --test-dir build --output-on-failure
+    # Fails if a GPL-only Qt module was linked, which would make the binary GPLv3.
+    sh "SVXConnect-Omarchy-$pkgver/tools/licence_guard.sh" build/svxconnect-omarchy
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+    install -Dm644 "SVXConnect-Omarchy-$pkgver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

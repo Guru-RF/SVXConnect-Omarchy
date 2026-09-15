@@ -1,0 +1,4 @@
+[submodule "third_party/svxconnect-cli"]
+	path = third_party/svxconnect-cli
+	url = https://github.com/Guru-RF/SVXConnect-CLI.git
+	branch = main

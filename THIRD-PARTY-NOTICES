@@ -1,0 +1,118 @@
+SVXConnect-Omarchy — third-party components
+======================================
+
+SVXConnect-Omarchy itself is licensed under the MIT License (see LICENSE).
+Copyright (c) 2026 Diëlectricum BV.
+
+It links against, or vendors, the components below.
+
+
+Qt 6
+----
+Copyright (C) The Qt Company Ltd. and other contributors.
+
+SVXConnect-Omarchy uses the Qt toolkit under the GNU Lesser General Public License,
+version 3 (LGPL-3.0-only). Qt is linked DYNAMICALLY and is not modified.
+
+  You may modify the Qt libraries this program uses, and relink this program
+  against your modified version. On a .deb installation the Qt libraries are
+  the distribution's own shared libraries and may simply be replaced.
+
+Only LGPL-licensed Qt modules are used: QtCore, QtGui, QtWidgets, QtNetwork,
+QtDBus and QtSvg.
+
+The following Qt modules are GPL-3.0-only in the open-source edition and are
+deliberately NOT used, because linking one would make this binary GPLv3 while
+this project's own source remains MIT: Qt Charts, Qt Data Visualization,
+Qt Graphs, Qt WebEngine, Qt Virtual Keyboard, Qt Wayland Compositor, Qt Quick 3D,
+Qt HTTP Server, Qt MQTT, Qt CoAP, Qt Network Authorization, Qt Lottie
+(CMake target Qt6::Bodymovin) and the QML compiler. This is enforced at
+configure time by cmake/LicenceGuard.cmake and again against the real link
+graph by tools/licence_guard.sh.
+
+Full licence texts:
+  Arch Linux packages     /usr/share/licenses/spdx/LGPL-3.0-only.txt
+                          /usr/share/licenses/spdx/GPL-3.0-only.txt
+  every other channel     licenses/LGPL-3.0-only.txt
+                          licenses/GPL-3.0-only.txt
+
+Both texts are required: LGPLv3 is written as a set of additional permissions
+on top of GPLv3, so shipping only the LGPL text is incomplete.
+
+  https://www.qt.io/  ·  Qt sources: https://download.qt.io/official_releases/qt/
+
+"Qt" is a trademark of The Qt Company Ltd. This project is not affiliated with
+or endorsed by The Qt Company.
+
+
+HOW THE LGPL OBLIGATION DIFFERS BY DISTRIBUTION CHANNEL
+-------------------------------------------------------
+This matters, and it is easy to state incorrectly.
+
+  .deb / apt repository     Qt is NOT conveyed by this project — it is a
+                            dependency satisfied by the distribution's own
+                            packages. This is LGPLv3 section 4d1. The notice
+                            above and dynamic linking discharge the obligation
+                            in full; there is no Qt source to host.
+
+  AppImage / any bundle     Qt IS conveyed, because the bundle contains the Qt
+                            shared libraries. This is LGPLv3 section 4d0, and
+                            it additionally requires that the corresponding Qt
+                            source, and a means of relinking this application
+                            against a modified Qt, be made available — or a
+                            valid written offer for them.
+
+Any bundling build MUST publish the matching Qt source and relink material
+alongside the artefact. See docs/PLAN.md section 5.
+
+
+libopus
+-------
+Opus audio codec. Copyright (c) 2001-2023 Xiph.Org, Skype Limited, Octasic,
+Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding,
+Erik de Castro Lopo.
+Licensed under the 3-clause BSD license. https://opus-codec.org/
+
+
+OpenSSL 3
+---------
+Copyright (c) 1998-2024 The OpenSSL Project Authors.
+Licensed under the Apache License 2.0. Section 4 of Apache-2.0 asks that the
+NOTICE text be retained in binary distributions. https://www.openssl.org/
+
+
+miniaudio (vendored via SVXConnect-CLI: third_party/miniaudio.h, v0.11.25)
+--------------------------------------------------------------------------
+Copyright 2026 David Reid.
+Dual licensed: public domain (Unlicense) OR MIT-0, at your option.
+SVXConnect-Omarchy takes it under MIT-0. https://miniaud.io/
+
+miniaudio dlopen()s the system audio client libraries at runtime rather than
+linking them:
+  - alsa-lib   (LGPL-2.1-or-later) — runtime dlopen of libasound.so.2
+  - libpulse   (LGPL-2.1-or-later) — runtime dlopen of libpulse.so.0
+
+Neither is a build dependency and neither is distributed with this project.
+Because the reference is a dlopen(), no linker-based dependency scan can detect
+it, so packaging/aur/*/PKGBUILD names these dependencies by hand. A package built without them
+installs cleanly and then has no audio at all.
+
+
+SVXConnect-CLI core (third_party/svxconnect-cli)
+------------------------------------------------
+Copyright (c) 2026 Diëlectricum BV. MIT License.
+The reflector protocol, mTLS, AES-GCM, Opus, jitter buffer, talkgroup manager,
+control FIFO, run lock and status export are compiled from this tree into the
+static library `svxcore`. https://github.com/Guru-RF/SVXConnect-CLI
+
+Note that ncurses is NOT a dependency of this package: src/ui/ui.c, the CLI's
+only ncurses consumer, is excluded from the svxcore build.
+
+
+Code provenance
+---------------
+The SvxLink reflector v3 protocol, TLS, AES-GCM and Opus layers originate in
+the author's own prior C work and are made available under the MIT License by
+the copyright holder.
+
+No code from the upstream SvxLink project (GPL-2.0) has been copied.
