@@ -1,0 +1,30 @@
+# Tell the RF.Guru pacman repository (Guru-RF/Arch) that a release is out.
+#
+# Guru-RF/Arch downloads the packages attached to the release, signs them and
+# publishes them. So a release must be published WITH its .pkg.tar.zst files
+# attached — `gh release create <tag> <files...>` uploads before it publishes.
+name: notify-arch
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Dispatch to Guru-RF/Arch
+        env:
+          # Fine-grained token with Contents: read and write on Guru-RF/Arch
+          # only. The default GITHUB_TOKEN cannot dispatch to another repository.
+          GH_TOKEN: ${{ secrets.ARCH_DISPATCH_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::ARCH_DISPATCH_TOKEN is not set; publish $TAG from the Guru-RF/Arch Actions tab instead."
+            exit 0
+          fi
+          gh api -X POST /repos/Guru-RF/Arch/dispatches \
+            -f event_type=package-released \
+            -f "client_payload[repo]=$GITHUB_REPOSITORY" \
+            -f "client_payload[tag]=$TAG"
