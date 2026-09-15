@@ -24,8 +24,8 @@ optdepends=('xdg-desktop-portal-hyprland: global push-to-talk on Hyprland'
 # fetched as its own tarball and handed to CMake with CLI_DIR.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
         "svxconnect-cli-$_cliver.tar.gz::https://github.com/Guru-RF/SVXConnect-CLI/archive/refs/tags/v$_cliver.tar.gz")
-sha256sums=('SKIP'
-            'SKIP')
+sha256sums=('762915d2a25d260b9283befaaffe7a38b486cd4c772524c25a77f971b5d16817'
+            'c956f7bad68998dcd5ecba6483dcecac6adb74e1ada6ce190598e2c20de06f04')
 
 build() {
     cmake -B build -S "SVXConnect-Omarchy-$pkgver" \
