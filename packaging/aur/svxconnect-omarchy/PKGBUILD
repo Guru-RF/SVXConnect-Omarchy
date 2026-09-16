@@ -4,7 +4,7 @@
 # the Omarchy theme and takes push-to-talk through Hyprland.
 
 pkgname=svxconnect-omarchy
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 # The SVXConnect-CLI release the app's core is built from — the commit
 # third_party/svxconnect-cli is pinned to in this release.

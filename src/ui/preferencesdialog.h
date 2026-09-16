@@ -139,6 +139,7 @@ private:
     QLabel      *m_fifoPreview     = nullptr;
 
     /* General */
+    QCheckBox *m_notifyTalkers = nullptr;
     QSpinBox  *m_txTimeout  = nullptr;
     QComboBox *m_logLevel   = nullptr;
     QLineEdit *m_ctlFifo    = nullptr;

@@ -15,7 +15,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(svxconnect-omarchy
-    VERSION 0.1.1
+    VERSION 0.1.2
     DESCRIPTION "SvxLink reflector client for Omarchy"
     HOMEPAGE_URL "https://svxconnect.app"
     LANGUAGES C CXX)
@@ -99,6 +99,7 @@ set(APP_SOURCES
     src/ui/sidebar.cpp           src/ui/sidebar.h
     src/ui/activitypanel.cpp     src/ui/activitypanel.h
     src/ui/trayicon.cpp          src/ui/trayicon.h
+    src/ui/notifier.cpp          src/ui/notifier.h
     src/ui/configfile.cpp        src/ui/configfile.h
     src/ui/preferencesdialog.cpp src/ui/preferencesdialog.h
 

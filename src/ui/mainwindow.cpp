@@ -9,6 +9,7 @@
 #include "ui/configfile.h"
 #include "ui/preferencesdialog.h"
 #include "ui/trayicon.h"
+#include "ui/notifier.h"
 #include "ptt/pttmanager.h"
 #include "ptt/hyprlandbinding.h"
 #include "core/logbridge.h"
@@ -114,6 +115,16 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
      * the bar — hiding the window would strand the process with no interface
      * and no way to quit it. */
     qApp->setQuitOnLastWindowClosed(!m_tray->isAvailable());
+
+    /* "Someone is talking" notifications. The notifier watches the talkgroup
+     * manager on every tick but only announces while the window is closed to
+     * the tray — see notifier.h. */
+    m_notifier = new Notifier(m_app, this);
+    connect(m_notifier, &Notifier::showWindowRequested, this, [this]() {
+        showNormal();
+        raise();
+        activateWindow();
+    });
 
     QSettings s;
     if (s.contains(QStringLiteral("window/geometry")))
@@ -471,6 +482,7 @@ void MainWindow::tickModel()
     m_status->tickModel(now);
     m_sidebar->tickModel(now);
     m_activity->tickModel(now);
+    m_notifier->tickModel(/*announce=*/!isVisible());
 
     refreshBanner();
     refreshPttButton();
@@ -691,6 +703,7 @@ void MainWindow::onPreferences()
     if (trigConn)
         disconnect(trigConn);
 
+    m_notifier->setEnabled(Notifier::enabledSetting());
     refreshPttHint();
 }
 

@@ -6,6 +6,7 @@
 #include "core/devlist.h"
 #include "ptt/portalbackend.h"
 #include "ptt/hyprlandbinding.h"
+#include "ui/notifier.h"
 
 #include <QSettings>
 #include <QTabWidget>
@@ -230,8 +231,10 @@ QWidget *PreferencesDialog::buildAudioTab()
     toneRow->addStretch(1);
     f->addRow(QString(), toneRow);
     f->addRow(QString(), hint(
-        tr("The test tone forces the volume to at least 50% and opens the playback "
-           "gate, so it plays even when the jitter buffer is empty."), page));
+        tr("Two beeps through the speaker SVXConnect is using right now. If you just "
+           "changed the speaker above, press Apply first — the tone follows the device "
+           "in use, not the one selected here. The volume is forced to at least 50%, "
+           "and a muted output is unmuted for the test."), page));
 
     m_volume = new QSpinBox(page);
     m_volume->setRange(0, 100);
@@ -488,6 +491,13 @@ QWidget *PreferencesDialog::buildGeneralTab()
     auto *page = new QWidget;
     auto *f = form(page);
 
+    m_notifyTalkers = new QCheckBox(tr("Notify when someone starts talking"), page);
+    f->addRow(QString(), m_notifyTalkers);
+    f->addRow(QString(), hint(
+        tr("A desktop notification naming the station and its talkgroup, while the "
+           "window is closed to the tray. Click it to bring SVXConnect back. Your own "
+           "transmissions never notify."), page));
+
     m_txTimeout = new QSpinBox(page);
     m_txTimeout->setRange(0, 3600);
     m_txTimeout->setSuffix(tr(" s"));
@@ -567,6 +577,8 @@ void PreferencesDialog::load()
     m_logLevel->setCurrentIndex(
         m_logLevel->findData(m_store.value(QStringLiteral("log_level"))));
     m_ctlFifo->setText(m_store.value(QStringLiteral("ctl_fifo")));
+
+    m_notifyTalkers->setChecked(Notifier::enabledSetting());
 
     m_pttMode->setCurrentIndex(m_pttMode->findData(
         QSettings().value(QLatin1String(kPttMode), QStringLiteral("hold")).toString()));
@@ -714,6 +726,8 @@ void PreferencesDialog::onUnbindHyprland()
 
 void PreferencesDialog::savePtt()
 {
+    Notifier::setEnabledSetting(m_notifyTalkers->isChecked());
+
     /* Only the mode is ours to store. The key belongs to the desktop. */
     QSettings qs;
     const QString mode = m_pttMode->currentData().toString();
@@ -883,6 +897,29 @@ void PreferencesDialog::applyLiveChanges(const QStringList &changed)
 
 void PreferencesDialog::onTestTone()
 {
-    if (m_app)
-        app_test_tone(m_app);
+    if (!m_app)
+        return;
+
+    /* app_test_tone() writes the beeps straight into the playback ring and
+     * returns silently when the core has no device open, and it lifts the
+     * volume but never the mute — so a muted output swallowed the tone with no
+     * hint that the button had done anything at all. Both cases are now
+     * answered, and the log says which speaker it went to. */
+    if (!app_audio_ready(m_app)) {
+        QMessageBox::warning(this, tr("No audio device"),
+            tr("SVXConnect has no speaker open, so there is nothing to play the test "
+               "tone through.\n\nPick a speaker above and press Apply, then try again. "
+               "The log (Ctrl+L) shows what the audio backend reported."));
+        return;
+    }
+
+    if (app_output_muted(m_app)) {
+        app_toggle_output_mute(m_app);
+        log_info("test tone: the output was muted — unmuting for the test");
+    }
+
+    const svx_config *cfg = app_config(m_app);
+    log_info("test tone: %d%% into '%s'", app_volume(m_app),
+             cfg->output_device[0] ? cfg->output_device : "(system default)");
+    app_test_tone(m_app);
 }

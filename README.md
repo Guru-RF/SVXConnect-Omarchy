@@ -12,6 +12,10 @@ same reflector core, the same configuration. Two things are new:
 - **Push-to-talk goes through Hyprland.** Hold a key anywhere on the desktop to
   transmit, and let go to stop. The key is a normal bind in
   `~/.config/hypr/bindings.lua`, and SVXConnect can write that bind for you.
+- **It tells you when someone starts talking.** While the window is closed to
+  the tray, a desktop notification names the station and its talkgroup; click it
+  to bring the window back. Your own transmissions never notify, and you can
+  turn it off in Preferences › General.
 
 ## How it fits together
 

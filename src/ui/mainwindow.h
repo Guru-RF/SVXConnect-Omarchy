@@ -45,6 +45,7 @@ class QFileSystemWatcher;
 
 class PttManager;
 class TrayIcon;
+class Notifier;
 class ConnectionBar;
 class Sidebar;
 class ActivityPanel;
@@ -111,6 +112,7 @@ private:
     svx_app    *m_app = nullptr;
     PttManager *m_pttManager = nullptr;
     TrayIcon   *m_tray       = nullptr;
+    Notifier   *m_notifier   = nullptr;
     bool        m_reallyQuit = false;
 
     ConnectionBar  *m_status    = nullptr;
