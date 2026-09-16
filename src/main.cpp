@@ -285,10 +285,6 @@ int main(int argc, char **argv)
     }
     app_set_owner_kind(core, RunLock::kOwnerKind);
 
-    MainWindow win(core);
-    win.setConfigPath(QString::fromUtf8(confPath));
-    win.show();
-
     /* Restart-after-editing.
      *
      * The whole point of routing this through main() rather than doing it in
@@ -300,31 +296,45 @@ int main(int argc, char **argv)
      * cannot happen until app_free() has returned. So the launch is deferred
      * all the way past teardown, at the bottom of this function. */
     bool restartWanted = false;
-    QObject::connect(&win, &MainWindow::restartRequested, &app, [&]() {
-        restartWanted = true;
-        app.quit();
-    });
 
     /* Captured before exec() so a restart preserves whatever the user
      * originally passed — notably -c <file>. */
     const QStringList relaunchArgs = QCoreApplication::arguments().mid(1);
     const QString     relaunchExe  = QCoreApplication::applicationFilePath();
 
-    /* 9. CoreLoop is constructed BEFORE app_start(), so that the observer is
-     *    installed before the core can fire it. app_start() is blocking —
-     *    miniaudio initialisation takes tens to hundreds of milliseconds — so
-     *    show the window first and let it paint. */
-    CoreLoop loop(core);
-    QObject::connect(&loop, &CoreLoop::coreChanged, &win, &MainWindow::onCoreChanged);
-    QObject::connect(&loop, &CoreLoop::quitRequested, &app, &QCoreApplication::quit);
+    int rc = 0;
+    {
+        /* THE SCOPE IS LOAD-BEARING. Both the window and the loop must be
+         * destroyed while `core` is still alive: ~CoreLoop detaches the core's
+         * observer with app_set_observer(), and ~PttManager un-keys the
+         * transmitter with app_ptt(), each through `core`. As stack objects of
+         * main() they would otherwise die AFTER app_free() below — a
+         * use-after-free that segfaulted on every quit, in ~CoreLoop. */
+        MainWindow win(core);
+        win.setConfigPath(QString::fromUtf8(confPath));
+        win.show();
 
-    installSignalHandling(&app);
+        QObject::connect(&win, &MainWindow::restartRequested, &app, [&]() {
+            restartWanted = true;
+            app.quit();
+        });
 
-    app.processEvents();     /* let the window paint before we block */
-    app_start(core);
-    loop.kick();
+        /* 9. CoreLoop is constructed BEFORE app_start(), so that the observer is
+         *    installed before the core can fire it. app_start() is blocking —
+         *    miniaudio initialisation takes tens to hundreds of milliseconds —
+         *    so show the window first and let it paint. */
+        CoreLoop loop(core);
+        QObject::connect(&loop, &CoreLoop::coreChanged, &win, &MainWindow::onCoreChanged);
+        QObject::connect(&loop, &CoreLoop::quitRequested, &app, &QCoreApplication::quit);
 
-    const int rc = app.exec();
+        installSignalHandling(&app);
+
+        app.processEvents();     /* let the window paint before we block */
+        app_start(core);
+        loop.kick();
+
+        rc = app.exec();
+    }
 
     /* 10. Teardown order matters: app_free() clears the status file and joins
      *     the connect worker (and logs while doing it), so the lock is
