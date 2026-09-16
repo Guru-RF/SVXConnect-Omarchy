@@ -28,6 +28,7 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include "core/svxcore.h"
 
@@ -40,6 +41,21 @@ public:
     /* Called from the 100 ms model tick. `announce` is false while the window
      * is on screen: talkers are still tracked, but nothing is sent. */
     void tickModel(bool announce);
+
+    /* The stations in `tgm`'s ACTIVE list that were not there last time, by
+     * display callsign, with the talkgroup of the last one in `tgOut`. `seen`
+     * is the previous pass's set and is updated in place.
+     *
+     * Identity is the SSID-stripped callsign, which is what the core itself
+     * matches on: it closes a transmission by callsign alone, because the
+     * talkgroup reported on stop can differ from the one reported on start.
+     * Keying on callsign+talkgroup would announce a station twice when it
+     * moved talkgroup mid-over.
+     *
+     * Pure, so tests/test_notifier.cpp can drive a whole QSO through it and
+     * prove that a talker STARTING notifies and a talker stopping does not. */
+    static QStringList freshTalkers(const tg_manager *tgm, const QString &ownCall,
+                                    QSet<QString> *seen, quint32 *tgOut);
 
     void setEnabled(bool on) { m_enabled = on; }
 

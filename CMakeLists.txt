@@ -15,7 +15,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(svxconnect-omarchy
-    VERSION 0.1.2
+    VERSION 0.1.3
     DESCRIPTION "SvxLink reflector client for Omarchy"
     HOMEPAGE_URL "https://svxconnect.app"
     LANGUAGES C CXX)
@@ -151,6 +151,13 @@ add_test(NAME configstore COMMAND test_configstore)
 add_executable(test_talkercall tests/test_talkercall.cpp)
 target_link_libraries(test_talkercall PRIVATE svxcore)
 add_test(NAME talkercall COMMAND test_talkercall)
+
+add_executable(test_notifier
+    tests/test_notifier.cpp
+    src/ui/notifier.cpp)
+target_include_directories(test_notifier PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_notifier PRIVATE svxcore Qt6::Core Qt6::DBus)
+add_test(NAME notifier COMMAND test_notifier)
 
 add_executable(test_hyprlandbinding
     tests/test_hyprlandbinding.cpp

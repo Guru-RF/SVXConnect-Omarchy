@@ -47,34 +47,41 @@ void Notifier::setEnabledSetting(bool on)
     QSettings().setValue(QLatin1String(kSetting), on);
 }
 
+QStringList Notifier::freshTalkers(const tg_manager *tgm, const QString &own,
+                                   QSet<QString> *seen, quint32 *tgOut)
+{
+    QSet<QString> current;
+    QStringList   fresh;      /* display names of talkers that just started */
+
+    for (int i = 0; i < tgm->n_active; ++i) {
+        const tgm_talker &t = tgm->active[i];
+        const QString call = QString::fromUtf8(t.call).toUpper();
+        if (call.isEmpty())
+            continue;
+        current.insert(call);
+
+        if (seen->contains(call))
+            continue;                       /* already talking a tick ago */
+        if (!own.isEmpty() && call == own)
+            continue;                       /* our own audio, echoed back */
+
+        fresh << QString::fromUtf8(t.full);
+        if (tgOut)
+            *tgOut = t.tg;
+    }
+
+    *seen = current;
+    return fresh;
+}
+
 void Notifier::tickModel(bool announce)
 {
     if (!m_app)
         return;
 
-    const tg_manager *tgm = app_tgm(m_app);
-    const QString mine = ownCall(app_config(m_app));
-
-    QSet<QString> current;
-    QStringList   fresh;      /* display names of talkers that just started */
-    quint32       freshTg = 0;
-
-    for (int i = 0; i < tgm->n_active; ++i) {
-        const tgm_talker &t = tgm->active[i];
-        const QString call = QString::fromUtf8(t.call).toUpper();
-        const QString key  = QStringLiteral("%1@%2").arg(call).arg(t.tg);
-        current.insert(key);
-
-        if (m_active.contains(key))
-            continue;                       /* already talking a tick ago */
-        if (!mine.isEmpty() && call == mine)
-            continue;                       /* our own audio, echoed back */
-
-        fresh << QString::fromUtf8(t.full);
-        freshTg = t.tg;
-    }
-
-    m_active = current;
+    quint32 tg = 0;
+    const QStringList fresh =
+        freshTalkers(app_tgm(m_app), ownCall(app_config(m_app)), &m_active, &tg);
 
     /* The first pass only learns who is already talking: whoever was on the
      * air when SVXConnect started did not "just start". */
@@ -86,7 +93,7 @@ void Notifier::tickModel(bool announce)
     if (!announce || !m_enabled || fresh.isEmpty())
         return;
 
-    announceTalkers(fresh, freshTg, fresh.size() - 1);
+    announceTalkers(fresh, tg, fresh.size() - 1);
 }
 
 void Notifier::announceTalkers(const QStringList &names, quint32 tg, int extra)
