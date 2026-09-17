@@ -312,7 +312,7 @@ int main(int argc, char **argv)
         log_warn("SVX_WINDOW_ONLY set — the reflector core will not be started");
         MainWindow w(nullptr);
         w.setConfigPath(QString::fromUtf8(confPath));
-        w.setReflectorHost(QString::fromUtf8(g_cfg.reflector));
+        w.setOfflineConfig(&g_cfg);
         w.show();
 
         scheduleScreenshot(app, w, QString::fromUtf8(confPath));

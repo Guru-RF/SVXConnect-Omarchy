@@ -273,10 +273,10 @@ void ActivityPanel::setFeed(ReflectorFeed *feed)
 
 void ActivityPanel::rebuildReflector(quint64 nowMs)
 {
-    /* The feed keeps 60 sessions; this panel is not a scroll area, so it shows
-     * the same 16 the core's own recent list holds. Beyond that the window
-     * would grow a history nobody asked to read. */
-    constexpr int kMaxRows = 16;
+    /* The feed keeps 60 sessions. The panel scrolls, so showing more than the
+     * core's own 16 costs nothing but rows — 30 is about as far back as anyone
+     * scrolls looking for who was on. */
+    constexpr int kMaxRows = 30;
 
     const QVector<ReflectorFeed::Session> &all = m_feed->sessions();
     const int n = qMin(all.size(), kMaxRows);

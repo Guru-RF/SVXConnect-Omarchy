@@ -26,6 +26,7 @@
 #include <QPlainTextEdit>
 #include <QTimer>
 #include <QMenu>
+#include <QScrollArea>
 #include <algorithm>
 #include <QAction>
 #include <QKeyEvent>
@@ -133,8 +134,10 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
      * everything downstream keys off isAvailable(). */
     m_feed = new ReflectorFeed(this);
     m_feed->setEnabled(ReflectorFeed::enabledSetting());
-    if (m_app)
-        m_feed->setReflector(QString::fromUtf8(app_config(m_app)->reflector));
+    if (m_app) {
+        m_cfg = app_config(m_app);
+        m_feed->setReflector(QString::fromUtf8(m_cfg->reflector));
+    }
     m_activity->setFeed(m_feed);
 
     connect(m_feed, &ReflectorFeed::availabilityChanged, this, [this](bool up) {
@@ -173,6 +176,12 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    /* A screenshot run is a throwaway process with a size chosen on the command
+     * line. Saving that as the window geometry would resize the real window on
+     * its next start — which is exactly what it did, once. */
+    if (qEnvironmentVariableIsSet("SVX_SCREENSHOT"))
+        return;
+
     QSettings s;
     s.setValue(QStringLiteral("window/geometry"), saveGeometry());
 }
@@ -259,11 +268,25 @@ void MainWindow::buildUi()
     bodyLay->addWidget(m_sidebar);
     bodyLay->addWidget(rule(body, true));
 
+    /* The activity panel scrolls, like the sidebar's talkgroup list.
+     *
+     * Without this its minimum height is however many rows it happens to hold,
+     * so a reflector with a busy 24 hours made the window refuse to be shorter
+     * than about 860 px — and whatever sat below it, the map, got squeezed to a
+     * strip or pushed off the bottom. A list is content; it must not dictate
+     * how small the window can be. */
     m_activity = new ActivityPanel(m_app, body);
     connect(m_activity, &ActivityPanel::talkgroupChosen, this, [this](quint32 tg) {
         if (m_app) app_tg_select(m_app, tg);
     });
-    bodyLay->addWidget(m_activity, 1);
+
+    auto *activityScroll = new QScrollArea(body);
+    activityScroll->setWidgetResizable(true);
+    activityScroll->setFrameShape(QFrame::NoFrame);
+    activityScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    activityScroll->setWidget(m_activity);
+    activityScroll->setMinimumHeight(Theme::space(150));
+    bodyLay->addWidget(activityScroll, 1);
 
     /* ---- log ---- */
     m_log = new QPlainTextEdit(central);
@@ -570,14 +593,26 @@ void MainWindow::applyMapVisibility()
     } else if (mode == QLatin1String("off")) {
         show = false;
     } else {
-        /* Automatic: only when the window is tall enough that the map is not
-         * competing with the talkgroups and the activity list for the same
-         * pixels. The two thresholds differ so a window dragged around the
-         * boundary does not flap. */
-        const int unfold = Theme::space(700);
-        const int fold   = Theme::space(620);
-        const bool room  = m_mapPane->isVisible() ? height() >= fold : height() >= unfold;
-        show = haveData && room;
+        /* Automatic: when there is room, measured rather than guessed.
+         *
+         * A fixed height threshold is wrong on the first theme with a larger
+         * font — what matters is whether the rest of the window still fits
+         * beside the map. So ask the layout: everything except the map needs
+         * `rest` pixels at its minimum, and the map wants its preferred height
+         * to be worth unfolding at all.
+         *
+         * Unfolding needs the preferred height and folding only happens when
+         * even the minimum no longer fits, which is the hysteresis: a window
+         * dragged across the boundary does not flap. */
+        const int mapWanted = m_mapPane->sizeHint().height();
+        const int mapLeast  = m_mapPane->minimumSizeHint().height();
+
+        int rest = centralWidget()->minimumSizeHint().height();
+        if (m_mapPane->isVisible())
+            rest -= mapLeast;
+
+        show = haveData && (m_mapPane->isVisible() ? height() >= rest + mapLeast
+                                                   : height() >= rest + mapWanted);
     }
 
     if (m_actShowMap) {
@@ -604,7 +639,7 @@ void MainWindow::refreshMapMarkers()
 
     QVector<MapView::Marker> markers;
 
-    const QString own = m_app ? QString::fromUtf8(app_config(m_app)->callsign).toUpper() : QString();
+    const QString own = m_cfg ? QString::fromUtf8(m_cfg->callsign).toUpper() : QString();
 
     if (m_feed) {
         const QHash<QString, ReflectorFeed::Node> &nodes = m_feed->nodes();
@@ -626,8 +661,8 @@ void MainWindow::refreshMapMarkers()
 
     /* Your own station, when the reflector did not list it — it is the one
      * marker whose position this client already knows. */
-    if (m_app && !own.isEmpty()) {
-        const svx_config *cfg = app_config(m_app);
+    if (m_cfg && !own.isEmpty()) {
+        const svx_config *cfg = m_cfg;
         const bool listed = std::any_of(markers.cbegin(), markers.cend(),
                                         [](const MapView::Marker &m) { return m.self; });
         if (!listed && (cfg->latitude != 0.0 || cfg->longitude != 0.0)) {
@@ -750,10 +785,13 @@ void MainWindow::setConfigPath(const QString &path)
     watchConfig();
 }
 
-void MainWindow::setReflectorHost(const QString &host)
+void MainWindow::setOfflineConfig(const svx_config *cfg)
 {
+    if (!cfg)
+        return;
+    m_cfg = cfg;
     if (m_feed)
-        m_feed->setReflector(host);
+        m_feed->setReflector(QString::fromUtf8(cfg->reflector));
 }
 
 void MainWindow::watchConfig()

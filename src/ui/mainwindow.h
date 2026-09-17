@@ -66,10 +66,11 @@ public:
      * may have taken it from -c. */
     void setConfigPath(const QString &path);
 
-    /* The reflector host, for the portal probe. With a core this comes from
-     * the live configuration; SVX_WINDOW_ONLY has no core, and main() passes
-     * it in so the feed and the map can still be exercised without one. */
-    void setReflectorHost(const QString &host);
+    /* The loaded configuration, for the window's own read-only uses — the
+     * portal probe and your station's position on the map. With a core this is
+     * app_config(); SVX_WINDOW_ONLY has no core, and main() passes the same
+     * struct in so both still work without one. */
+    void setOfflineConfig(const svx_config *cfg);
 
 public slots:
     /* Connected to CoreLoop::coreChanged() — a hint, not the primary path. */
@@ -129,7 +130,8 @@ private:
     void applyPttBindings();
     void showAbout();
 
-    svx_app    *m_app = nullptr;
+    svx_app          *m_app = nullptr;
+    const svx_config *m_cfg = nullptr;
     PttManager *m_pttManager = nullptr;
     TrayIcon   *m_tray       = nullptr;
     Notifier   *m_notifier   = nullptr;

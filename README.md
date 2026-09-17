@@ -140,9 +140,11 @@ entirely, which is how you see exactly what a plain reflector gives you.
 
 It lives under the push-to-talk controls and is folded away by default. In its
 automatic mode it folds out when there is both something to show and room to
-show it — roughly a window taller than 700 px, so a tiled half-screen window
-keeps all its height for the talkgroups and the activity list. **Show map**
-(`Ctrl+M`) opens or closes it explicitly, and that choice then sticks.
+show it — room being measured against what the rest of the window needs, not a
+number of pixels, so it holds up under a theme with a larger font. A tiled
+half-screen window keeps all its height for the talkgroups and the activity
+list. **Show map** (`Ctrl+M`) opens or closes it explicitly, and that choice
+then sticks.
 
 Drag to pan, scroll to zoom, hover a marker for its callsign and coordinates.
 The tiles come from OpenStreetMap, cached on disk between runs; under a dark

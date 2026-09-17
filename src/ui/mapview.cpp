@@ -17,6 +17,7 @@
 #include <QStandardPaths>
 #include <QWheelEvent>
 #include <QtMath>
+#include <algorithm>
 
 namespace {
 
@@ -99,6 +100,7 @@ MapView::MapView(QWidget *parent) : QWidget(parent)
         m_darkTiles = dark;
         m_tiles.clear();
         m_queue.clear();
+        m_queued.clear();
         update();
     });
 }
@@ -151,16 +153,20 @@ QString MapView::tileUrl(int z, int x, int y) const
 void MapView::requestTile(int z, int x, int y)
 {
     const QString key = keyOf(z, x, y);
-    if (m_tiles.contains(key) || m_pending.contains(key))
+    if (m_tiles.contains(key) || m_inflight.contains(key) || m_queued.contains(key))
         return;
 
-    m_pending.insert(key);
-    if (m_inFlight >= kMaxFlight) {
+    /* In flight and waiting are DIFFERENT states, and conflating them was a
+     * bug worth a comment: the wait list is emptied on every paint, so a tile
+     * that was only ever queued would have stayed marked as "asked for" and
+     * never been requested again — a permanently blank square on the map. */
+    if (m_inflight.size() >= kMaxFlight) {
+        m_queued.insert(key);
         m_queue.append(key);
         return;
     }
 
-    ++m_inFlight;
+    m_inflight.insert(key);
 
     QNetworkRequest req{QUrl(tileUrl(z, x, y))};
     /* The tile policy requires an identifying User-Agent. A request with Qt's
@@ -183,8 +189,7 @@ void MapView::requestTile(int z, int x, int y)
 void MapView::onTileReady(QNetworkReply *reply, const QString &key, int z, int x, int y)
 {
     reply->deleteLater();
-    m_pending.remove(key);
-    --m_inFlight;
+    m_inflight.remove(key);
 
     if (reply->error() == QNetworkReply::NoError) {
         QImage img;
@@ -199,15 +204,14 @@ void MapView::onTileReady(QNetworkReply *reply, const QString &key, int z, int x
     }
     Q_UNUSED(z); Q_UNUSED(x); Q_UNUSED(y);
 
-    /* Next from the queue, skipping anything that scrolled out of view while
-     * it waited — m_queue is drained on every paint. */
-    while (!m_queue.isEmpty() && m_inFlight < kMaxFlight) {
+    /* Next from the wait list, which only ever holds tiles that were on screen
+     * at the last paint. */
+    while (!m_queue.isEmpty() && m_inflight.size() < kMaxFlight) {
         const QString next = m_queue.takeFirst();
+        m_queued.remove(next);
         const QStringList parts = next.split(QLatin1Char('/'));
-        if (parts.size() != 3)
-            continue;
-        m_pending.remove(next);   /* requestTile re-inserts it */
-        requestTile(parts[0].toInt(), parts[1].toInt(), parts[2].toInt());
+        if (parts.size() == 3)
+            requestTile(parts[0].toInt(), parts[1].toInt(), parts[2].toInt());
     }
 }
 
@@ -279,17 +283,42 @@ void MapView::fitToMarkers()
             if (m.self) subject.append(m);
         padLat = 1.1; padLon = 1.7;        /* ≈ 120 km around home    */
     }
+    bool everything = false;
     if (subject.isEmpty()) {
         subject = m_markers;
         padLat = 0.3; padLon = 0.45;
+        everything = true;
     }
 
     double north = -90.0, south = 90.0, east = -180.0, west = 180.0;
-    for (const Marker &m : subject) {
-        north = qMax(north, m.latitude);
-        south = qMin(south, m.latitude);
-        east  = qMax(east,  m.longitude);
-        west  = qMin(west,  m.longitude);
+
+    if (everything && subject.size() >= 8) {
+        /* Where most of the stations are, not where the two furthest ones are.
+         * A reflector's list always has a few of those — a holiday in Egypt, a
+         * node someone left at a placeholder in Sweden — and fitting the
+         * extremes puts a Belgian network on a map of three continents. The
+         * middle 90% is the network; the rest is a pan away. */
+        QVector<double> lats, lons;
+        lats.reserve(subject.size());
+        lons.reserve(subject.size());
+        for (const Marker &m : subject) {
+            lats.append(m.latitude);
+            lons.append(m.longitude);
+        }
+        std::sort(lats.begin(), lats.end());
+        std::sort(lons.begin(), lons.end());
+
+        const int lo = subject.size() / 20;              /* 5th percentile  */
+        const int hi = subject.size() - 1 - lo;          /* 95th            */
+        south = lats[lo]; north = lats[hi];
+        west  = lons[lo]; east  = lons[hi];
+    } else {
+        for (const Marker &m : subject) {
+            north = qMax(north, m.latitude);
+            south = qMin(south, m.latitude);
+            east  = qMax(east,  m.longitude);
+            west  = qMin(west,  m.longitude);
+        }
     }
 
     m_latitude  = (north + south) / 2.0;
@@ -404,7 +433,10 @@ void MapView::paintEvent(QPaintEvent *)
     const int lastX  = int(std::floor((width()  - originX) / kTile));
     const int lastY  = int(std::floor((height() - originY) / kTile));
 
-    m_queue.clear();   /* only ask for what is on screen right now */
+    /* The wait list is rebuilt from what is on screen now, so a tile that
+     * scrolled away before its turn came is simply forgotten. */
+    m_queue.clear();
+    m_queued.clear();
 
     bool missing = false;
     for (int ty = firstY; ty <= lastY; ++ty) {
@@ -417,11 +449,31 @@ void MapView::paintEvent(QPaintEvent *)
             const auto it = m_tiles.constFind(keyOf(m_zoom, nx, ny));
             if (it != m_tiles.constEnd()) {
                 p.drawPixmap(dest, *it, QRectF(0, 0, kTile, kTile));
-            } else {
-                p.fillRect(dest, Theme::wash(pal.foreground, 0.04));
-                requestTile(m_zoom, nx, ny);
-                missing = true;
+                continue;
             }
+
+            /* Not here yet. Rather than a grey hole, blow up the matching
+             * quarter of a tile from a zoom level already in the cache — blurry
+             * for a moment, which is what every slippy map does, and it means
+             * zooming never flashes the background. */
+            bool stood_in = false;
+            for (int up = 1; up <= 4 && !stood_in; ++up) {
+                const int pz = m_zoom - up;
+                if (pz < kMinZoom)
+                    break;
+                const auto pit = m_tiles.constFind(keyOf(pz, nx >> up, ny >> up));
+                if (pit == m_tiles.constEnd())
+                    continue;
+                const int span = 1 << up;                 /* children per side */
+                const qreal sub = qreal(kTile) / span;
+                p.drawPixmap(dest, *pit, QRectF((nx % span) * sub, (ny % span) * sub, sub, sub));
+                stood_in = true;
+            }
+            if (!stood_in)
+                p.fillRect(dest, Theme::wash(pal.foreground, 0.04));
+
+            requestTile(m_zoom, nx, ny);
+            missing = true;
         }
     }
 
@@ -558,6 +610,19 @@ void MapView::wheelEvent(QWheelEvent *e)
     m_userMoved = true;
     update();
     e->accept();
+}
+
+void MapView::resizeEvent(QResizeEvent *e)
+{
+    QWidget::resizeEvent(e);
+
+    /* The zoom that fits the markers depends on the size of this widget, and
+     * when the pane is first unfolded that size is not yet the one it will be
+     * shown at — so the fit computed then is for the wrong pane and leaves the
+     * stations off screen. Refit on every resize until the user takes over. */
+    if (!m_userMoved)
+        fitToMarkers();
+    update();
 }
 
 void MapView::leaveEvent(QEvent *)

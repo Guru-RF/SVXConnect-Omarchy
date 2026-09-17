@@ -15,9 +15,10 @@
  *
  * WHAT IT DRAWS
  * -------------
- * Raster tiles from OpenStreetMap, or CARTO's dark basemap when the Omarchy
- * theme is dark — a light map under a dark theme is the one thing that makes a
- * themed window look broken. Over them, one marker per node the reflector
+ * Raster tiles from OpenStreetMap — turned over into a dark basemap here when
+ * the Omarchy theme is dark, since a light map under a dark theme is the one
+ * thing that makes a themed window look broken, and the ready-made dark tile
+ * services now want an API key. Over them, one marker per node the reflector
  * knows the position of, with the current talker highlighted and your own
  * station marked separately.
  *
@@ -84,6 +85,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent *) override;
     void wheelEvent(QWheelEvent *) override;
     void leaveEvent(QEvent *) override;
+    void resizeEvent(QResizeEvent *) override;
 
 private:
     /* ---- Web Mercator, in tile units at the current zoom ---- */
@@ -101,10 +103,10 @@ private:
 
     QNetworkAccessManager *m_net = nullptr;
 
-    QHash<QString, QPixmap> m_tiles;     /* "z/x/y" -> pixmap        */
-    QSet<QString>           m_pending;   /* in flight, or queued     */
-    QVector<QString>        m_queue;     /* waiting for a free slot  */
-    int                     m_inFlight = 0;
+    QHash<QString, QPixmap> m_tiles;     /* "z/x/y" -> pixmap           */
+    QSet<QString>           m_inflight;  /* a request is open right now */
+    QSet<QString>           m_queued;    /* waiting for a free slot     */
+    QVector<QString>        m_queue;     /* ...in this order            */
     bool                    m_darkTiles = false;
 
     QVector<Marker> m_markers;
