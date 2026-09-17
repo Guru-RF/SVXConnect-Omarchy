@@ -41,8 +41,11 @@
 #include <QSet>
 #include <QVector>
 
+class QFrame;
+class QLabel;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QToolButton;
 
 class MapView : public QWidget {
     Q_OBJECT
@@ -51,12 +54,16 @@ public:
     /* One station on the map. `self` is this client; `talking` is drawn on top
      * of everything else, because it is the only marker anyone is looking for. */
     struct Marker {
-        QString callsign;
-        QString detail;      /* talkgroup, or how long since it was heard */
-        double  latitude  = 0.0;
-        double  longitude = 0.0;
-        bool    talking   = false;
-        bool    self      = false;
+        QString      callsign;
+        QString      detail;       /* the short line drawn beside the dot     */
+        QString      location;     /* the portal's free text, e.g. "Brugge"   */
+        int          tg      = 0;
+        QVector<int> monitoredTgs;
+        bool         online  = false;
+        double       latitude  = 0.0;
+        double       longitude = 0.0;
+        bool         talking   = false;
+        bool         self      = false;
     };
 
     explicit MapView(QWidget *parent = nullptr);
@@ -74,10 +81,37 @@ public:
     /* Forget that the user panned, and fit again on the next marker update. */
     void resetView();
 
+    /* Open the station card for a callsign, centring on it if it is off
+     * screen. False when the reflector has no position for that station. */
+    bool openStation(const QString &callsign);
+
+    /* How tall the pane would like to be, in pixels — what the drag handle
+     * above it sets. A preference, not a constraint: the layout may still give
+     * it less, down to minimumSizeHint(), rather than forcing the window to
+     * grow. */
+    void setPreferredHeight(int px);
+    int  preferredHeight() const { return m_preferredHeight; }
+
+public slots:
+    /* The on-map controls, also reachable from the window's menu. */
+    void zoomIn();
+    void zoomOut();
+
+    /* Extra lines for the open station card — the answer to stationOpened().
+     * Ignored when the card has moved on to another station, which is what
+     * makes a slow lookup harmless. */
+    void setStationInfo(const QString &callsign, const QString &text);
+
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
+signals:
+    /* A station was clicked. The window answers with whatever it can find out
+     * about the callsign — see setStationInfo(). */
+    void stationOpened(const QString &callsign);
+
 protected:
+    void keyPressEvent(QKeyEvent *) override;
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
@@ -95,6 +129,22 @@ private:
     QPointF centreTile() const;                 /* map centre, in tile units  */
     QPointF toWidget(double lat, double lon) const;
 
+    /* Change zoom keeping `anchor` (in widget coordinates) over the same point
+     * on the ground. The centre is the anchor for the buttons; the pointer is
+     * the anchor for the wheel. */
+    void zoomTo(int zoom, const QPointF &anchor);
+    void layOutControls();
+    void refreshControls();
+
+    /* The station card: what the reflector knows about one marker, opened by
+     * clicking it. */
+    void buildCard();
+    void openCard(int markerIndex);
+    void closeCard();
+    void refreshCard();
+    void placeCard();
+    static QString kindOf(const Marker &m);
+
     void requestTile(int z, int x, int y);
     void onTileReady(QNetworkReply *reply, const QString &key, int z, int x, int y);
     QString tileUrl(int z, int x, int y) const;
@@ -102,6 +152,19 @@ private:
     int  markerAt(const QPointF &pos) const;    /* index, or -1 */
 
     QNetworkAccessManager *m_net = nullptr;
+
+    QToolButton *m_zoomIn   = nullptr;
+    QToolButton *m_zoomOut  = nullptr;
+    QToolButton *m_recentre = nullptr;
+
+    QFrame *m_card      = nullptr;
+    QLabel *m_cardTitle = nullptr;
+    QLabel *m_cardKind  = nullptr;
+    QLabel *m_cardWhere = nullptr;
+    QLabel *m_cardTgs   = nullptr;
+    QLabel *m_cardPos   = nullptr;
+    QLabel *m_cardInfo  = nullptr;   /* filled by setStationInfo() */
+    QString m_cardCall;              /* which station it is open on */
 
     QHash<QString, QPixmap> m_tiles;     /* "z/x/y" -> pixmap           */
     QSet<QString>           m_inflight;  /* a request is open right now */
@@ -111,6 +174,8 @@ private:
 
     QVector<Marker> m_markers;
 
+    int    m_preferredHeight = 0;   /* 0 = the built-in default */
+
     double m_latitude  = 50.5;   /* somewhere over Belgium, until told better */
     double m_longitude = 4.5;
     int    m_zoom      = 6;
@@ -118,6 +183,7 @@ private:
     bool    m_userMoved = false;
     bool    m_dragging  = false;
     QPointF m_dragFrom;
+    QPointF m_pressAt;      /* to tell a click from the start of a pan */
     int     m_hovered   = -1;
 };
 

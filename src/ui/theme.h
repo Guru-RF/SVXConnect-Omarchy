@@ -80,6 +80,12 @@ constexpr char32_t Speaker    = 0xf028;   /* volume up     */
 constexpr char32_t SpeakerOff = 0xf026;   /* volume off    */
 constexpr char32_t Lock       = 0xf023;
 constexpr char32_t Unlock     = 0xf09c;
+constexpr char32_t Plus       = 0xf067;
+constexpr char32_t Minus      = 0xf068;
+constexpr char32_t Crosshairs = 0xf05b;   /* recentre the map */
+constexpr char32_t Close      = 0xf00d;
+constexpr char32_t User       = 0xf007;
+constexpr char32_t Link       = 0xf08e;   /* external link    */
 } // namespace Glyph
 
 } // namespace Theme

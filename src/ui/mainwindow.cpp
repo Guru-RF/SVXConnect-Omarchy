@@ -26,8 +26,11 @@
 #include <QPlainTextEdit>
 #include <QTimer>
 #include <QMenu>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QScrollArea>
 #include <algorithm>
+#include <functional>
 #include <QAction>
 #include <QKeyEvent>
 #include <QScrollBar>
@@ -49,6 +52,63 @@ QFrame *rule(QWidget *parent, bool vertical = false)
     Theme::setRole(f, vertical ? "vrule" : "rule");
     return f;
 }
+
+/* The grab strip above the map.
+ *
+ * The macOS app has one and it earns its place: how much of the window a map
+ * deserves is a matter of taste and of what else is on screen, and a fixed
+ * split is wrong for somebody. Dragging sets the map's PREFERRED height, not a
+ * fixed one — the layout may still give it less rather than forcing the window
+ * to grow past the screen.
+ *
+ * A plain QWidget with a std::function rather than a Q_OBJECT signal: AUTOMOC
+ * only scans headers, so a Q_OBJECT here would compile and fail to link. */
+class GrabHandle : public QWidget {
+public:
+    explicit GrabHandle(QWidget *parent) : QWidget(parent)
+    {
+        setFixedHeight(Theme::space(7));
+        setCursor(Qt::SizeVerCursor);
+        setToolTip(QObject::tr("Drag to resize the map"));
+    }
+
+    std::function<void(int)> onDrag;   /* pixels; positive means taller */
+
+protected:
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        if (e->button() != Qt::LeftButton) return;
+        m_dragging = true;
+        m_last = e->globalPosition();
+    }
+
+    void mouseMoveEvent(QMouseEvent *e) override
+    {
+        if (!m_dragging || !onDrag) return;
+        const int dy = int(m_last.y() - e->globalPosition().y());   /* up = taller */
+        if (dy == 0) return;
+        m_last = e->globalPosition();
+        onDrag(dy);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *) override { m_dragging = false; }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.fillRect(QRect(0, 0, width(), 1), Theme::wash(Theme::palette().foreground, 0.12));
+
+        /* A short grip, so the strip reads as something you can pull. */
+        const int w = Theme::space(26);
+        const int y = height() / 2 + 1;
+        p.fillRect(QRect((width() - w) / 2, y, w, 1),
+                   Theme::wash(Theme::palette().foreground, 0.30));
+    }
+
+private:
+    bool    m_dragging = false;
+    QPointF m_last;
+};
 
 QToolButton *iconButton(char32_t glyph, const QString &tip, QWidget *parent)
 {
@@ -352,10 +412,19 @@ void MainWindow::buildUi()
     auto *mapLay = new QVBoxLayout(m_mapPane);
     mapLay->setContentsMargins(0, 0, 0, 0);
     mapLay->setSpacing(0);
-    mapLay->addWidget(rule(m_mapPane));
+
+    auto *mapHandle = new GrabHandle(m_mapPane);
+    mapLay->addWidget(mapHandle);
 
     m_map = new MapView(m_mapPane);
+    m_map->setPreferredHeight(
+        QSettings().value(QStringLiteral("map/height"), Theme::space(260)).toInt());
     mapLay->addWidget(m_map, 1);
+
+    mapHandle->onDrag = [this](int dy) {
+        m_map->setPreferredHeight(m_map->preferredHeight() + dy);
+        QSettings().setValue(QStringLiteral("map/height"), m_map->preferredHeight());
+    };
 
     m_mapPane->hide();
     root->addWidget(m_mapPane);
@@ -649,12 +718,16 @@ void MainWindow::refreshMapMarkers()
             if (!n.hasPos)
                 continue;
             MapView::Marker m;
-            m.callsign  = n.callsign;
-            m.detail    = n.tg > 0 ? tr("TG %1").arg(n.tg) : n.location;
-            m.latitude  = n.latitude;
-            m.longitude = n.longitude;
-            m.talking   = n.isTalker;
-            m.self      = !own.isEmpty() && n.callsign.startsWith(own);
+            m.callsign     = n.callsign;
+            m.detail       = n.tg > 0 ? tr("TG %1").arg(n.tg) : n.location;
+            m.location     = n.location;
+            m.tg           = n.tg;
+            m.monitoredTgs = n.monitoredTgs;
+            m.online       = n.online;
+            m.latitude     = n.latitude;
+            m.longitude    = n.longitude;
+            m.talking      = n.isTalker;
+            m.self         = !own.isEmpty() && n.callsign.startsWith(own);
             markers.append(m);
         }
     }
@@ -669,6 +742,8 @@ void MainWindow::refreshMapMarkers()
             MapView::Marker me;
             me.callsign  = own;
             me.detail    = tr("you");
+            me.location  = QString::fromUtf8(cfg->location);
+            me.online    = true;
             me.latitude  = cfg->latitude;
             me.longitude = cfg->longitude;
             me.self      = true;
@@ -783,6 +858,19 @@ void MainWindow::setConfigPath(const QString &path)
 {
     m_configPath = path;
     watchConfig();
+}
+
+bool MainWindow::showStationOnMap(const QString &callsign)
+{
+    if (!m_map)
+        return false;
+
+    if (!m_mapPane->isVisible()) {
+        setMapMode(QStringLiteral("on"));
+        applyMapVisibility();
+    }
+    refreshMapMarkers();
+    return m_map->openStation(callsign);
 }
 
 void MainWindow::setOfflineConfig(const svx_config *cfg)

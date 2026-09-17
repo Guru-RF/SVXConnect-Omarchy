@@ -72,6 +72,11 @@ public:
      * struct in so both still work without one. */
     void setOfflineConfig(const svx_config *cfg);
 
+    /* Unfold the map and open one station's card. Used by the activity list
+     * and by the documentation screenshots. False when the map has no position
+     * for that callsign. */
+    bool showStationOnMap(const QString &callsign);
+
 public slots:
     /* Connected to CoreLoop::coreChanged() — a hint, not the primary path. */
     void onCoreChanged();

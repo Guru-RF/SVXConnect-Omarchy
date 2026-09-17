@@ -6,6 +6,10 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QNetworkAccessManager>
 #include <QNetworkDiskCache>
@@ -15,6 +19,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QStandardPaths>
+#include <QToolButton>
+#include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtMath>
 #include <algorithm>
@@ -88,6 +94,31 @@ MapView::MapView(QWidget *parent) : QWidget(parent)
     cache->setMaximumCacheSize(64ll * 1024 * 1024);
     m_net->setCache(cache);
 
+    /* ---- the controls, over the map at its top right ----
+     * Real buttons rather than something painted: they get the theme, the
+     * hover states and the tooltips for free, and a painted control that has
+     * to reimplement all three always ends up looking like a painted control. */
+    auto control = [this](char32_t glyph, const QString &tip, const QString &shortcut) {
+        auto *b = new QToolButton(this);
+        b->setText(Theme::Glyph::of(glyph));
+        b->setToolTip(shortcut.isEmpty() ? tip : tr("%1  (%2)").arg(tip, shortcut));
+        b->setCursor(Qt::ArrowCursor);
+        b->setFocusPolicy(Qt::NoFocus);
+        Theme::setRole(b, "map");
+        return b;
+    };
+
+    m_zoomIn   = control(Theme::Glyph::Plus,       tr("Zoom in"),  QStringLiteral("+"));
+    m_zoomOut  = control(Theme::Glyph::Minus,      tr("Zoom out"), QStringLiteral("-"));
+    m_recentre = control(Theme::Glyph::Crosshairs, tr("Centre on the current talker, or on your own station"),
+                         QStringLiteral("0"));
+
+    connect(m_zoomIn,   &QToolButton::clicked, this, &MapView::zoomIn);
+    connect(m_zoomOut,  &QToolButton::clicked, this, &MapView::zoomOut);
+    connect(m_recentre, &QToolButton::clicked, this, &MapView::resetView);
+
+    buildCard();
+
     m_darkTiles = Theme::palette().dark;
     connect(&OmarchyTheme::get(), &OmarchyTheme::changed, this, [this]() {
         const bool dark = Theme::palette().dark;
@@ -107,7 +138,20 @@ MapView::MapView(QWidget *parent) : QWidget(parent)
 
 MapView::~MapView() = default;
 
-QSize MapView::sizeHint() const        { return QSize(Theme::space(420), Theme::space(260)); }
+QSize MapView::sizeHint() const
+{
+    return QSize(Theme::space(420),
+                 m_preferredHeight > 0 ? m_preferredHeight : Theme::space(260));
+}
+
+void MapView::setPreferredHeight(int px)
+{
+    const int want = qBound(Theme::space(150), px, Theme::space(620));
+    if (want == m_preferredHeight)
+        return;
+    m_preferredHeight = want;
+    updateGeometry();
+}
 QSize MapView::minimumSizeHint() const { return QSize(Theme::space(200), Theme::space(170)); }
 
 /* ------------------------------------------------------------- projection */
@@ -215,6 +259,208 @@ void MapView::onTileReady(QNetworkReply *reply, const QString &key, int z, int x
     }
 }
 
+/* ------------------------------------------------------------ station card */
+
+/* What kind of station this is, in the reflector's own terms. The order is
+ * load-bearing and is the one the macOS app settled on: a suffixed callsign is
+ * a portable or a mobile whatever else it says (those are always flagged
+ * offline, because they are not registered nodes at all), and only then does
+ * the ON0 repeater prefix or the online flag get a say. */
+QString MapView::kindOf(const Marker &m)
+{
+    if (m.callsign.contains(QLatin1Char('/')))
+        return tr("PORTABLE");
+    if (!m.online)
+        return tr("OFFLINE");
+    if (m.callsign.startsWith(QLatin1String("ON0")))
+        return tr("REPEATER");
+    return tr("NODE");
+}
+
+void MapView::buildCard()
+{
+    m_card = new QFrame(this);
+    Theme::setRole(m_card, "mapcard");
+    m_card->setAttribute(Qt::WA_StyledBackground, true);
+    m_card->hide();
+
+    auto *lay = new QVBoxLayout(m_card);
+    lay->setContentsMargins(Theme::space(10), Theme::space(8), Theme::space(8), Theme::space(10));
+    lay->setSpacing(Theme::space(3));
+
+    auto *head = new QHBoxLayout;
+    head->setSpacing(Theme::space(6));
+
+    m_cardTitle = new QLabel(m_card);
+    Theme::setRole(m_cardTitle, "value");
+    head->addWidget(m_cardTitle);
+
+    m_cardKind = new QLabel(m_card);
+    Theme::setRole(m_cardKind, "chip");
+    head->addWidget(m_cardKind);
+    head->addStretch(1);
+
+    auto *close = new QToolButton(m_card);
+    close->setText(Theme::Glyph::of(Theme::Glyph::Close));
+    close->setToolTip(tr("Close  (Esc)"));
+    close->setCursor(Qt::ArrowCursor);
+    close->setFocusPolicy(Qt::NoFocus);
+    Theme::setRole(close, "icon");
+    connect(close, &QToolButton::clicked, this, &MapView::closeCard);
+    head->addWidget(close);
+    lay->addLayout(head);
+
+    m_cardWhere = new QLabel(m_card);
+    m_cardWhere->setWordWrap(true);
+    lay->addWidget(m_cardWhere);
+
+    m_cardTgs = new QLabel(m_card);
+    Theme::setRole(m_cardTgs, "hint");
+    m_cardTgs->setWordWrap(true);
+    lay->addWidget(m_cardTgs);
+
+    m_cardPos = new QLabel(m_card);
+    Theme::setRole(m_cardPos, "time");
+    lay->addWidget(m_cardPos);
+
+    m_cardInfo = new QLabel(m_card);
+    Theme::setRole(m_cardInfo, "hint");
+    m_cardInfo->setWordWrap(true);
+    m_cardInfo->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    m_cardInfo->setOpenExternalLinks(true);
+    m_cardInfo->hide();
+    lay->addWidget(m_cardInfo);
+
+    m_card->setMaximumWidth(Theme::space(320));
+}
+
+void MapView::openCard(int markerIndex)
+{
+    if (markerIndex < 0 || markerIndex >= m_markers.size()) {
+        closeCard();
+        return;
+    }
+
+    m_cardCall = m_markers[markerIndex].callsign;
+    m_cardInfo->clear();
+    m_cardInfo->hide();
+
+    refreshCard();
+    m_card->show();
+    m_card->raise();
+    placeCard();
+    update();
+
+    /* Whoever owns this view may know more about the callsign than the
+     * reflector does — see setStationInfo(). */
+    emit stationOpened(m_cardCall);
+}
+
+bool MapView::openStation(const QString &callsign)
+{
+    for (int i = 0; i < m_markers.size(); ++i) {
+        if (m_markers[i].callsign.compare(callsign, Qt::CaseInsensitive) != 0)
+            continue;
+
+        /* Bring it into view if it is not already — a card pointing at a
+         * marker off the edge of the pane explains nothing. */
+        const QPointF at = toWidget(m_markers[i].latitude, m_markers[i].longitude);
+        if (!QRectF(rect()).adjusted(Theme::space(20), Theme::space(20),
+                                     -Theme::space(20), -Theme::space(20)).contains(at)) {
+            m_latitude  = m_markers[i].latitude;
+            m_longitude = m_markers[i].longitude;
+            m_userMoved = true;
+            refreshControls();
+        }
+        openCard(i);
+        return true;
+    }
+    return false;
+}
+
+void MapView::closeCard()
+{
+    if (m_cardCall.isEmpty() && !m_card->isVisible())
+        return;
+    m_cardCall.clear();
+    m_card->hide();
+    update();
+}
+
+void MapView::refreshCard()
+{
+    if (m_cardCall.isEmpty())
+        return;
+
+    const Marker *m = nullptr;
+    for (const Marker &c : m_markers)
+        if (c.callsign == m_cardCall) { m = &c; break; }
+
+    if (!m) {                       /* it left the reflector while open */
+        closeCard();
+        return;
+    }
+
+    m_cardTitle->setText(m->callsign);
+    m_cardKind->setText(m->talking ? tr("TALKING") : kindOf(*m));
+    Theme::setProp(m_cardKind, "tone", m->talking ? QStringLiteral("ok") : QString());
+
+    m_cardWhere->setText(m->location.isEmpty() ? tr("No location published") : m->location);
+    m_cardWhere->setVisible(true);
+
+    QStringList lines;
+    if (m->tg > 0)
+        lines << tr("On TG %1").arg(m->tg);
+    if (!m->monitoredTgs.isEmpty()) {
+        QStringList tgs;
+        for (int tg : m->monitoredTgs)
+            tgs << QString::number(tg);
+        lines << tr("Monitors %1").arg(tgs.join(QStringLiteral(", ")));
+    }
+    m_cardTgs->setText(lines.join(QStringLiteral(" · ")));
+    m_cardTgs->setVisible(!lines.isEmpty());
+
+    m_cardPos->setText(tr("%1, %2").arg(m->latitude, 0, 'f', 5).arg(m->longitude, 0, 'f', 5));
+}
+
+void MapView::setStationInfo(const QString &callsign, const QString &text)
+{
+    /* A lookup that lands after the card moved on belongs to nobody. */
+    if (m_cardCall.isEmpty() || callsign.compare(m_cardCall, Qt::CaseInsensitive) != 0)
+        return;
+
+    m_cardInfo->setText(text);
+    m_cardInfo->setVisible(!text.isEmpty());
+    placeCard();
+}
+
+void MapView::placeCard()
+{
+    if (!m_card->isVisible() || m_cardCall.isEmpty())
+        return;
+
+    const Marker *m = nullptr;
+    for (const Marker &c : m_markers)
+        if (c.callsign == m_cardCall) { m = &c; break; }
+    if (!m)
+        return;
+
+    m_card->adjustSize();
+    const QSize sz = m_card->size();
+    const QPointF at = toWidget(m->latitude, m->longitude);
+    const int pad = Theme::space(8);
+
+    /* Beside the marker, flipped to whichever side has room, and never off the
+     * edge of the pane. */
+    int x = int(at.x()) + Theme::space(14);
+    if (x + sz.width() + pad > width())
+        x = int(at.x()) - Theme::space(14) - sz.width();
+    int y = int(at.y()) - sz.height() / 2;
+
+    m_card->move(qBound(pad, x, qMax(pad, width()  - sz.width()  - pad)),
+                 qBound(pad, y, qMax(pad, height() - sz.height() - pad)));
+}
+
 /* ---------------------------------------------------------------- markers */
 
 void MapView::setMarkers(const QVector<Marker> &markers)
@@ -224,7 +470,8 @@ void MapView::setMarkers(const QVector<Marker> &markers)
             return false;
         for (int i = 0; i < a.size(); ++i) {
             if (a[i].callsign != b[i].callsign || a[i].talking != b[i].talking
-                || a[i].detail != b[i].detail
+                || a[i].detail != b[i].detail || a[i].tg != b[i].tg
+                || a[i].online != b[i].online || a[i].location != b[i].location
                 || !qFuzzyCompare(a[i].latitude + 1.0, b[i].latitude + 1.0)
                 || !qFuzzyCompare(a[i].longitude + 1.0, b[i].longitude + 1.0))
                 return false;
@@ -232,8 +479,10 @@ void MapView::setMarkers(const QVector<Marker> &markers)
         return true;
     };
 
-    if (same(markers, m_markers))
+    if (same(markers, m_markers)) {
+        refreshControls();
         return;
+    }
 
     const bool hadNone = m_markers.isEmpty();
     m_markers = markers;
@@ -256,6 +505,9 @@ void MapView::setMarkers(const QVector<Marker> &markers)
         }
     }
 
+    refreshControls();
+    refreshCard();
+    placeCard();
     update();
 }
 
@@ -352,6 +604,7 @@ void MapView::resetView()
 {
     m_userMoved = false;
     fitToMarkers();
+    refreshControls();
 }
 
 int MapView::markerAt(const QPointF &pos) const
@@ -525,6 +778,7 @@ void MapView::mousePressEvent(QMouseEvent *e)
         return;
     m_dragging = true;
     m_dragFrom = e->position();
+    m_pressAt  = e->position();
     setCursor(Qt::ClosedHandCursor);
 }
 
@@ -557,58 +811,125 @@ void MapView::mouseMoveEvent(QMouseEvent *e)
     while (m_longitude < -180.0) m_longitude += 360.0;
 
     m_userMoved = true;
+    placeCard();
     update();
 }
 
-void MapView::mouseReleaseEvent(QMouseEvent *)
+void MapView::mouseReleaseEvent(QMouseEvent *e)
 {
+    const bool wasDrag = m_dragging
+        && (e->position() - m_pressAt).manhattanLength() > Theme::space(4);
+
     m_dragging = false;
     setCursor(Qt::OpenHandCursor);
+
+    if (e->button() != Qt::LeftButton || wasDrag)
+        return;
+
+    /* A click, not a pan: open the station under it, or dismiss the card. */
+    const int hit = markerAt(e->position());
+    if (hit >= 0)
+        openCard(hit);
+    else
+        closeCard();
+}
+
+void MapView::keyPressEvent(QKeyEvent *e)
+{
+    switch (e->key()) {
+    case Qt::Key_Escape: closeCard();  break;
+    case Qt::Key_Plus:
+    case Qt::Key_Equal:  zoomIn();     break;
+    case Qt::Key_Minus:  zoomOut();    break;
+    case Qt::Key_0:      resetView();  break;
+    default:             QWidget::keyPressEvent(e); return;
+    }
+    e->accept();
 }
 
 void MapView::mouseDoubleClickEvent(QMouseEvent *e)
 {
     if (e->button() != Qt::LeftButton)
         return;
-    if (m_zoom < kMaxZoom) {
-        ++m_zoom;
-        m_userMoved = true;
-        update();
-    }
+    zoomTo(m_zoom + 1, e->position());
 }
 
-void MapView::wheelEvent(QWheelEvent *e)
+void MapView::zoomTo(int zoom, const QPointF &anchor)
 {
-    const int steps = e->angleDelta().y() > 0 ? 1 : -1;
-    const int next = qBound(kMinZoom, m_zoom + steps, kMaxZoom);
-    if (next == m_zoom) {
-        e->accept();
+    const int next = qBound(kMinZoom, zoom, kMaxZoom);
+    if (next == m_zoom)
         return;
-    }
 
-    /* Zoom about the pointer, not the centre: zooming towards a station and
-     * watching it slide off screen is the thing that makes a hand-written map
-     * feel hand-written. */
-    const QPointF before = e->position();
+    /* Keep whatever is under `anchor` under it afterwards. Zooming towards a
+     * station and watching it slide off screen is the thing that makes a
+     * hand-written map feel hand-written. */
     const double n0 = 1 << m_zoom;
     const QPointF c0 = centreTile();
-    const QPointF world0(c0.x() + (before.x() - width() / 2.0) / kTile,
-                         c0.y() + (before.y() - height() / 2.0) / kTile);
+    const QPointF world0(c0.x() + (anchor.x() - width()  / 2.0) / kTile,
+                         c0.y() + (anchor.y() - height() / 2.0) / kTile);
 
     m_zoom = next;
-    const double scale = double(1 << m_zoom) / n0;
-    const QPointF world1 = world0 * scale;
+    const QPointF world1 = world0 * (double(1 << m_zoom) / n0);
 
-    const QPointF c1(world1.x() - (before.x() - width() / 2.0) / kTile,
-                     world1.y() - (before.y() - height() / 2.0) / kTile);
+    const QPointF c1(world1.x() - (anchor.x() - width()  / 2.0) / kTile,
+                     world1.y() - (anchor.y() - height() / 2.0) / kTile);
 
     m_latitude  = latitudeOf(qBound(0.0, c1.y(), double(1 << m_zoom)), m_zoom);
     m_longitude = c1.x() / double(1 << m_zoom) * 360.0 - 180.0;
     while (m_longitude >  180.0) m_longitude -= 360.0;
     while (m_longitude < -180.0) m_longitude += 360.0;
 
+    /* Zooming is taking over the view, from the buttons as much as from the
+     * wheel — otherwise the next marker update would undo it. */
     m_userMoved = true;
+    refreshControls();
+    placeCard();
     update();
+}
+
+void MapView::zoomIn()  { zoomTo(m_zoom + 1, QPointF(width() / 2.0, height() / 2.0)); }
+void MapView::zoomOut() { zoomTo(m_zoom - 1, QPointF(width() / 2.0, height() / 2.0)); }
+
+void MapView::refreshControls()
+{
+    if (!m_zoomIn)
+        return;
+    m_zoomIn->setEnabled(m_zoom < kMaxZoom);
+    m_zoomOut->setEnabled(m_zoom > kMinZoom);
+    /* Recentring is only meaningful when there is something to centre on, and
+     * only a change when the view has been moved off it. */
+    m_recentre->setEnabled(!m_markers.isEmpty() && m_userMoved);
+}
+
+void MapView::layOutControls()
+{
+    if (!m_zoomIn)
+        return;
+
+    const int pad = Theme::space(8);
+    const int gap = Theme::space(4);
+
+    /* Top right, stacked. Hidden altogether in a pane too short to hold them
+     * without covering the map it is meant to control. */
+    const QSize a = m_zoomIn->sizeHint();
+    const bool room = height() >= a.height() * 3 + gap * 2 + pad * 2;
+    for (QToolButton *b : {m_zoomIn, m_zoomOut, m_recentre})
+        b->setVisible(room);
+    if (!room)
+        return;
+
+    int y = pad;
+    for (QToolButton *b : {m_zoomIn, m_zoomOut, m_recentre}) {
+        const QSize sz = b->sizeHint();
+        b->setGeometry(width() - pad - sz.width(), y, sz.width(), sz.height());
+        b->raise();
+        y += sz.height() + gap;
+    }
+}
+
+void MapView::wheelEvent(QWheelEvent *e)
+{
+    zoomTo(m_zoom + (e->angleDelta().y() > 0 ? 1 : -1), e->position());
     e->accept();
 }
 
@@ -622,6 +943,8 @@ void MapView::resizeEvent(QResizeEvent *e)
      * stations off screen. Refit on every resize until the user takes over. */
     if (!m_userMoved)
         fitToMarkers();
+    layOutControls();
+    placeCard();
     update();
 }
 

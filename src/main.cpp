@@ -172,8 +172,9 @@ void syncAutoPosition(svx_config *cfg, const char *confPath)
  * how the header row's behaviour at narrow widths is checked.
  * SVX_SCREENSHOT_PREFS=<tab index> also renders the preferences dialog on that
  * tab, as <file>-prefs.png, and SVX_SCREENSHOT_LOCATION=1 the position lookup,
- * as <file>-location.png. SVX_SCREENSHOT_DELAY=<ms> waits longer before
- * grabbing, which the map needs. */
+ * as <file>-location.png, and SVX_SCREENSHOT_STATION=<callsign> the map with
+ * that station's card open, as <file>-station.png. SVX_SCREENSHOT_DELAY=<ms>
+ * waits longer before grabbing, which the map needs. */
 void scheduleScreenshot(QApplication &app, MainWindow &w, const QString &confFile)
 {
     const QString shot = qEnvironmentVariable("SVX_SCREENSHOT");
@@ -202,6 +203,14 @@ void scheduleScreenshot(QApplication &app, MainWindow &w, const QString &confFil
             QString prefsShot = shot;
             prefsShot.replace(QStringLiteral(".png"), QStringLiteral("-prefs.png"));
             dlg.grab().save(prefsShot);
+        }
+        const QString station = qEnvironmentVariable("SVX_SCREENSHOT_STATION");
+        if (!station.isEmpty()) {
+            w.showStationOnMap(station);
+            QCoreApplication::processEvents();
+            QString mapShot = shot;
+            mapShot.replace(QStringLiteral(".png"), QStringLiteral("-station.png"));
+            w.grab().save(mapShot);
         }
         if (qEnvironmentVariableIntValue("SVX_SCREENSHOT_LOCATION") > 0) {
             LocationDialog dlg(&w);

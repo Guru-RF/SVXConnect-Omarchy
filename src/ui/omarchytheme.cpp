@@ -717,6 +717,23 @@ QToolButton[role="icon"] {
 QToolButton[role="icon"]:hover   { background: {fillHover}; border-color: {borderHover}; }
 QToolButton[role="icon"]:checked { background: {fillSelected}; color: {accent}; }
 
+/* Controls that sit ON the map, over raster tiles rather than over the
+ * window's own background: they need a solid surface and a border of their
+ * own, or they are illegible over a city. */
+QToolButton[role="map"] {
+    background: {bg}; color: {fgBright};
+    border: {bw}px solid {borderNormal}; border-radius: {r}px;
+    padding: {s2}px {s6}px; font-size: {fBody}px;
+    min-width: {s16}px;
+}
+QToolButton[role="map"]:hover    { background: {fillSelection}; border-color: {borderHover}; }
+QToolButton[role="map"]:disabled { color: {fgDisabled}; border-color: {rule}; }
+
+*[role="mapcard"] {
+    background: {bg}; color: {fg};
+    border: {bw}px solid {menuBorder}; border-radius: {r}px;
+}
+
 QToolButton[role="lock"] { padding: {s2}px {padX}px; }
 QToolButton[role="lock"][locked="true"] {
     background: {yellow}; color: {bg}; border-color: {yellow}; font-weight: bold;
