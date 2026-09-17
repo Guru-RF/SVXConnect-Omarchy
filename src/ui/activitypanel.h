@@ -56,6 +56,7 @@ private:
     void buildUi();
     void rebuildLocal(quint64 nowMs);
     void rebuildRecent(quint64 nowMs);
+    void refreshScopeHint();
     Row  makeRow(const QString &callsign, quint32 tg, bool live, quint64 stamp);
 
     svx_app *m_app = nullptr;
@@ -66,6 +67,9 @@ private:
     QLabel      *m_localEmpty   = nullptr;
 
     QLabel      *m_recentHeader = nullptr;
+    /* Why a talkgroup is missing from the list: locking and muting both
+     * unsubscribe, so nothing from those talkgroups is received at all. */
+    QLabel      *m_scopeHint    = nullptr;
     QVBoxLayout *m_recentLayout = nullptr;
     QLabel      *m_recentEmpty  = nullptr;
 

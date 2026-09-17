@@ -98,6 +98,16 @@ void ActivityPanel::buildUi()
     m_recentHeader = labelWithRole(tr("Recent"), "section", this);
     root->addWidget(m_recentHeader);
 
+    /* Locking and muting are not display filters: both take the talkgroup out
+     * of the subscription sent to the reflector, so nothing from it arrives at
+     * all — no audio, and no activity to list here. That is worth saying,
+     * because an empty Recent otherwise looks like a quiet net. */
+    m_scopeHint = labelWithRole(QString(), "hint", this);
+    Theme::setTone(m_scopeHint, "warn");
+    m_scopeHint->setWordWrap(true);
+    m_scopeHint->hide();
+    root->addWidget(m_scopeHint);
+
     m_recentLayout = new QVBoxLayout;
     m_recentLayout->setContentsMargins(0, 0, 0, 0);
     m_recentLayout->setSpacing(Theme::space(2));
@@ -220,4 +230,42 @@ void ActivityPanel::tickModel(quint64 nowMs)
     if (!m_app) return;
     rebuildLocal(nowMs);
     rebuildRecent(nowMs);
+    refreshScopeHint();
+}
+
+void ActivityPanel::refreshScopeHint()
+{
+    const tg_manager *tgm = app_tgm(m_app);
+    const svx_config *cfg = app_config(m_app);
+
+    QString text;
+    if (tgm_locked(tgm)) {
+        const uint32_t sel = tgm_selected(tgm);
+        text = sel ? tr("Locked to TG %1 — no other talkgroup is received while it is locked.").arg(sel)
+                   : tr("Locked — no talkgroup is received while it is locked.");
+    } else {
+        /* Muted talkgroups, named, so it is obvious which ones are silent. */
+        QStringList muted;
+        for (int i = 0; i < cfg->n_monitored; ++i) {
+            const uint32_t id = cfg->monitored[i].id;
+            if (tgm_is_muted(tgm, id) && !muted.contains(QString::number(id)))
+                muted << QString::number(id);
+        }
+        for (int i = 0; i < cfg->n_switchable; ++i) {
+            const uint32_t id = cfg->switchable[i].id;
+            if (tgm_is_muted(tgm, id) && !muted.contains(QString::number(id)))
+                muted << QString::number(id);
+        }
+        if (!muted.isEmpty())
+            text = tr("TG %1 muted — not received, so nothing from it is listed.")
+                       .arg(muted.join(QStringLiteral(", ")));
+    }
+
+    if (text.isEmpty()) {
+        m_scopeHint->hide();
+        return;
+    }
+    if (m_scopeHint->text() != text)
+        m_scopeHint->setText(text);
+    m_scopeHint->show();
 }

@@ -59,6 +59,16 @@ void TalkgroupButton::setMuted(bool muted)
 {
     if (m_muted == muted) return;
     m_muted = muted;
+
+    /* Muting is not a volume control: the talkgroup leaves the subscription
+     * sent to the reflector, so nothing from it arrives — no audio, and no
+     * entries in Recent either. Say so, rather than leaving someone to wonder
+     * why a talkgroup has been quiet all afternoon. */
+    setToolTip(muted
+        ? tr("TG %1 is muted: it is not received at all, so no activity from it "
+             "is listed. Right-click to unmute.").arg(m_tg)
+        : tr("Switch to TG %1. Right-click to mute.").arg(m_tg));
+
     update();
 }
 
