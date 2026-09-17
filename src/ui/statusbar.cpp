@@ -8,7 +8,9 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QFontMetrics>
+#include <QResizeEvent>
 #include <algorithm>
+#include <functional>
 
 namespace {
 
@@ -29,6 +31,11 @@ ConnectionBar::ConnectionBar(svx_app *app, QWidget *parent) : QWidget(parent), m
 void ConnectionBar::buildUi()
 {
     m_row = new QHBoxLayout(this);
+    /* Without this the layout hands its own minimum — the sum of every label's
+     * full text — to this widget, and through it to the window, which then
+     * refuses to be dragged narrower than the widest thing the header happens
+     * to be showing. relayout() decides what fits; the layout must not. */
+    m_row->setSizeConstraint(QLayout::SetNoConstraint);
     m_row->setContentsMargins(Theme::space(14), Theme::space(6), Theme::space(6), Theme::space(6));
     m_row->setSpacing(Theme::space(10));
 
@@ -79,6 +86,70 @@ void ConnectionBar::addTrailing(QWidget *w)
     m_row->addWidget(w);
 }
 
+QSize ConnectionBar::minimumSizeHint() const
+{
+    /* Room for the state dot, the state word and the connect button; anything
+     * else is optional and relayout() drops it. */
+    return QSize(Theme::space(260), QWidget::minimumSizeHint().height());
+}
+
+void ConnectionBar::resizeEvent(QResizeEvent *e)
+{
+    QWidget::resizeEvent(e);
+    relayout();
+}
+
+void ConnectionBar::relayout()
+{
+    if (!m_row)
+        return;
+
+    /* Start from everything shown, so widening the window brings the detail
+     * back in the same order it went away. */
+    m_identity->setText(m_identityFull);
+    for (QWidget *w : {static_cast<QWidget *>(m_identity), static_cast<QWidget *>(m_rx),
+                       static_cast<QWidget *>(m_tx), static_cast<QWidget *>(m_nodes),
+                       static_cast<QWidget *>(m_grid)})
+        w->setVisible(true);
+
+    const QMargins margins = m_row->contentsMargins();
+
+    /* What the row wants, measured from the widgets themselves: a QLabel's
+     * size hint is its whole text, which is exactly what was making the window
+     * refuse to shrink. m_detail is the elastic one — it elides its own text —
+     * so it is counted at its minimum. */
+    auto needed = [this, margins]() {
+        int count = 0;
+        int want  = margins.left() + margins.right();
+        for (int i = 0; i < m_row->count(); ++i) {
+            QWidget *w = m_row->itemAt(i)->widget();
+            if (!w || w->isHidden())
+                continue;
+            want += (w == m_detail) ? w->minimumWidth() : w->sizeHint().width();
+            ++count;
+        }
+        return want + m_row->spacing() * std::max(0, count - 1);
+    };
+
+    /* Least important first. The link state, the error, the connect button and
+     * the window\'s own buttons are never dropped. */
+    const std::function<void()> steps[] = {
+        [this] { m_grid->hide(); },                      /* grid square, location */
+        [this] { m_nodes->hide(); },                     /* client id, node count */
+        [this] { m_identity->setText(m_identityShort); },/* drop host:port, keep the callsign */
+        [this] { m_tx->hide(); },
+        [this] { m_rx->hide(); },
+        [this] { m_identity->hide(); },
+    };
+
+    const int available = width();
+    for (const auto &step : steps) {
+        if (needed() <= available)
+            break;
+        step();
+    }
+}
+
 void ConnectionBar::tickModel(quint64 nowMs)
 {
     Q_UNUSED(nowMs);
@@ -125,9 +196,11 @@ void ConnectionBar::tickModel(quint64 nowMs)
         Theme::setTone(m_detail, "");
     }
 
-    m_identity->setText(QStringLiteral("%1 · %2:%3")
+    m_identityFull = QStringLiteral("%1 · %2:%3")
         .arg(QString::fromUtf8(cfg->callsign), QString::fromUtf8(rc_host(rc)))
-        .arg(rc_port(rc)));
+        .arg(rc_port(rc));
+    m_identityShort = QString::fromUtf8(cfg->callsign);
+    m_identity->setToolTip(m_identityFull);
 
     rc_stats s{};
     rc_get_stats(rc, &s);
@@ -161,4 +234,6 @@ void ConnectionBar::tickModel(quint64 nowMs)
     } else {
         m_grid->setText(tr("no location"));
     }
+
+    relayout();
 }
