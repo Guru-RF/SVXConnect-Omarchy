@@ -225,6 +225,28 @@ svxconnect-omarchy
 The desktop app reads and writes the same file; its **Edit configuration**
 (`Ctrl+E`) opens it in your Omarchy editor.
 
+### Your station position
+
+The reflector plots you from latitude and longitude, and the grid square in the
+header is derived from them, so **Preferences → Connection → Station position**
+has a **Find my position…** button rather than expecting you to read
+coordinates off a map:
+
+- **Look up address** — type street and number, postcode, city and country.
+  The lookup goes to OpenStreetMap's [Nominatim][nominatim], the one free
+  geocoder that resolves a house number, and offers every match with its
+  coordinates so you can pick the right street.
+- **Detect automatically** — reuses the location you already gave Omarchy for
+  its weather panel (`~/.local/state/omarchy/settings/weather.json`, written by
+  `omarchy-weather-location`) when that has coordinates. Failing that it asks
+  ipapi.co, which places you in roughly the right town and says so.
+
+Nothing leaves the machine until you press one of those buttons. Picking a
+result fills the location, latitude and longitude fields, and the grid square
+updates as you watch.
+
+[nominatim]: https://nominatim.org/
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).

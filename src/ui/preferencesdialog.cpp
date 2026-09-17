@@ -7,6 +7,7 @@
 #include "ptt/portalbackend.h"
 #include "ptt/hyprlandbinding.h"
 #include "ui/notifier.h"
+#include "ui/locationdialog.h"
 
 #include <QSettings>
 #include <QTabWidget>
@@ -198,6 +199,27 @@ QWidget *PreferencesDialog::buildConnectionTab()
     };
     connect(m_latitude,  &QLineEdit::textChanged, this, recomputeGrid);
     connect(m_longitude, &QLineEdit::textChanged, this, recomputeGrid);
+
+    /* Coordinates precise enough to plot an antenna are not something anyone
+     * knows by heart, and reading them off a map is where a digit goes missing.
+     * The lookup fills all three fields at once; the grid square then follows
+     * from the textChanged connections above. */
+    auto *lookup = new QPushButton(tr("Find my position…"), qth);
+    lookup->setCursor(Qt::PointingHandCursor);
+    lookup->setToolTip(tr("Look the coordinates up from an address, or take them "
+                          "from your Omarchy weather location."));
+    connect(lookup, &QPushButton::clicked, this, [this]() {
+        LocationDialog dlg(this);
+        if (dlg.exec() != QDialog::Accepted)
+            return;
+        const LocationDialog::Place p = dlg.chosen();
+        if (!p.name.isEmpty())
+            m_location->setText(p.name);
+        /* QLocale::c(), for the same reason the validators above use it. */
+        m_latitude->setText(QLocale::c().toString(p.latitude, 'f', 6));
+        m_longitude->setText(QLocale::c().toString(p.longitude, 'f', 6));
+    });
+    qthForm->addRow(QString(), lookup);
 
     qthForm->addRow(QString(), hint(
         tr("Leave both at 0 to publish no position at all. The reflector portal "

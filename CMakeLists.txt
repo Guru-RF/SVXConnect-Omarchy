@@ -102,6 +102,7 @@ set(APP_SOURCES
     src/ui/notifier.cpp          src/ui/notifier.h
     src/ui/configfile.cpp        src/ui/configfile.h
     src/ui/preferencesdialog.cpp src/ui/preferencesdialog.h
+    src/ui/locationdialog.cpp    src/ui/locationdialog.h
 
     src/settings/configstore.cpp src/settings/configstore.h
 
@@ -158,6 +159,18 @@ add_executable(test_notifier
 target_include_directories(test_notifier PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_notifier PRIVATE svxcore Qt6::Core Qt6::DBus)
 add_test(NAME notifier COMMAND test_notifier)
+
+add_executable(test_locationlookup
+    tests/test_locationlookup.cpp
+    src/ui/locationdialog.cpp
+    src/ui/omarchytheme.cpp)
+target_include_directories(test_locationlookup PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_locationlookup PRIVATE
+    SVXCONNECT_VERSION="${SVXCONNECT_VERSION}"
+    QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_locationlookup PRIVATE
+    svxcore Qt6::Widgets Qt6::Network Qt6::Svg)
+add_test(NAME locationlookup COMMAND test_locationlookup)
 
 add_executable(test_hyprlandbinding
     tests/test_hyprlandbinding.cpp

@@ -27,6 +27,7 @@
 #include "ui/mainwindow.h"
 #include "ui/omarchytheme.h"
 #include "ui/preferencesdialog.h"
+#include "ui/locationdialog.h"
 
 namespace {
 
@@ -110,6 +111,52 @@ void enforceCNumeric(const char *when)
         log_err("LC_NUMERIC is not C after %s (%.7f formats as \"%s\") — "
                 "node position would be rejected by the reflector", when, 51.05, probe);
     }
+}
+
+/* SVX_SCREENSHOT=<file.png> renders the window to a file and quits.
+ *
+ * With QT_QPA_PLATFORM=offscreen that needs no compositor, which makes it the
+ * way to check a theme (see SVX_OMARCHY_THEME_DIR) and to make documentation
+ * screenshots. SVX_SCREENSHOT_SIZE=<w>x<h> sizes the window first, which is
+ * how the header row's behaviour at narrow widths is checked.
+ * SVX_SCREENSHOT_PREFS=<tab index> also renders the preferences dialog on that
+ * tab, as <file>-prefs.png, and SVX_SCREENSHOT_LOCATION=1 the position lookup,
+ * as <file>-location.png. */
+void scheduleScreenshot(QApplication &app, MainWindow &w, const QString &confFile)
+{
+    const QString shot = qEnvironmentVariable("SVX_SCREENSHOT");
+    if (shot.isEmpty())
+        return;
+
+    const QString size = qEnvironmentVariable("SVX_SCREENSHOT_SIZE");
+    const qsizetype x = size.indexOf(QLatin1Char('x'));
+    if (x > 0)
+        w.resize(size.left(x).toInt(), size.mid(x + 1).toInt());
+
+    QTimer::singleShot(900, &app, [&w, &app, shot, confFile]() {
+        w.grab().save(shot);
+        bool hasTab = false;
+        const int tab = qEnvironmentVariableIntValue("SVX_SCREENSHOT_PREFS", &hasTab);
+        if (hasTab) {
+            PreferencesDialog dlg(nullptr, confFile, &w);
+            if (auto *tabs = dlg.findChild<QTabWidget *>())
+                tabs->setCurrentIndex(tab);
+            dlg.show();
+            QCoreApplication::processEvents();
+            QString prefsShot = shot;
+            prefsShot.replace(QStringLiteral(".png"), QStringLiteral("-prefs.png"));
+            dlg.grab().save(prefsShot);
+        }
+        if (qEnvironmentVariableIntValue("SVX_SCREENSHOT_LOCATION") > 0) {
+            LocationDialog dlg(&w);
+            dlg.show();
+            QCoreApplication::processEvents();
+            QString locShot = shot;
+            locShot.replace(QStringLiteral(".png"), QStringLiteral("-location.png"));
+            dlg.grab().save(locShot);
+        }
+        app.quit();
+    });
 }
 
 } // namespace
@@ -209,31 +256,8 @@ int main(int argc, char **argv)
         w.setConfigPath(QString::fromUtf8(confPath));
         w.show();
 
-        /* SVX_SCREENSHOT=<file.png> renders the window to a file and quits.
-         * With QT_QPA_PLATFORM=offscreen that needs no compositor, which makes
-         * it the way to check a theme (see SVX_OMARCHY_THEME_DIR) and to make
-         * documentation screenshots. SVX_SCREENSHOT_PREFS=<tab index> also
-         * renders the preferences dialog on that tab, as <file>-prefs.png. */
-        const QString shot = qEnvironmentVariable("SVX_SCREENSHOT");
-        const QString confFile = QString::fromUtf8(confPath);
-        if (!shot.isEmpty()) {
-            QTimer::singleShot(600, &app, [&w, &app, shot, confFile]() {
-                w.grab().save(shot);
-                bool hasTab = false;
-                const int tab = qEnvironmentVariableIntValue("SVX_SCREENSHOT_PREFS", &hasTab);
-                if (hasTab) {
-                    PreferencesDialog dlg(nullptr, confFile, &w);
-                    if (auto *tabs = dlg.findChild<QTabWidget *>())
-                        tabs->setCurrentIndex(tab);
-                    dlg.show();
-                    QCoreApplication::processEvents();
-                    QString prefsShot = shot;
-                    prefsShot.replace(QStringLiteral(".png"), QStringLiteral("-prefs.png"));
-                    dlg.grab().save(prefsShot);
-                }
-                app.quit();
-            });
-        }
+        scheduleScreenshot(app, w, QString::fromUtf8(confPath));
+
         const int rc = app.exec();
         LogBridge::shutdown();
         return rc;
@@ -313,6 +337,7 @@ int main(int argc, char **argv)
         MainWindow win(core);
         win.setConfigPath(QString::fromUtf8(confPath));
         win.show();
+        scheduleScreenshot(app, win, QString::fromUtf8(confPath));
 
         QObject::connect(&win, &MainWindow::restartRequested, &app, [&]() {
             restartWanted = true;
