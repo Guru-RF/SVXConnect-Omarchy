@@ -69,6 +69,17 @@ public:
     static QString omarchyLocationPath();
     static Place   parseOmarchyLocation(const QByteArray &json);
 
+    /* The same file, read. An invalid Place means Omarchy has no position to
+     * offer — no file, or a name without coordinates. */
+    static Place omarchyPlace();
+
+    /* Automatic mode: the station position follows omarchy-weather-location
+     * instead of whatever is typed in Preferences. Stored with the desktop
+     * settings, not in svxconnect.conf: the CLI shares that file and would
+     * warn about a key it does not know. */
+    static bool autoModeSetting();
+    static void setAutoModeSetting(bool on);
+
     static QUrl  ipLookupUrl();
     static Place parseIpLookup(const QByteArray &json);
 

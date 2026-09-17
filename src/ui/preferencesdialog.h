@@ -73,6 +73,10 @@ private slots:
     void onApply();
     void onAccept();
     void onTestTone();
+    /* Automatic position: the three fields follow Omarchy's weather location
+     * and stop being editable. Called whenever the mode changes. */
+    void applyPositionMode();
+
     void refreshDeviceLists();
     void onBindHyprland();
     void onUnbindHyprland();
@@ -99,10 +103,13 @@ private:
     QLineEdit *m_email     = nullptr;
     QLineEdit *m_reflector = nullptr;
     QSpinBox  *m_port      = nullptr;
-    QLineEdit *m_location  = nullptr;
-    QLineEdit *m_latitude  = nullptr;
-    QLineEdit *m_longitude = nullptr;
-    QLabel    *m_grid      = nullptr;
+    QComboBox   *m_posMode   = nullptr;
+    QLineEdit   *m_location  = nullptr;
+    QLineEdit   *m_latitude  = nullptr;
+    QLineEdit   *m_longitude = nullptr;
+    QLabel      *m_grid      = nullptr;
+    QPushButton *m_lookup    = nullptr;
+    QLabel      *m_posHint   = nullptr;
 
     /* Audio */
     QComboBox *m_inputDev   = nullptr;

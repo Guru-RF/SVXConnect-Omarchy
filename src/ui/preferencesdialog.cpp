@@ -161,6 +161,16 @@ QWidget *PreferencesDialog::buildConnectionTab()
     auto *qthForm = new QFormLayout(qth);
     qthForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
 
+    /* Two ways to have a position, and they are exclusive: either Omarchy owns
+     * it — one place to change it, for the weather panel and the reflector
+     * both — or this dialog does. Anything in between is a pair of numbers
+     * nobody can say the origin of. */
+    m_posMode = new QComboBox(qth);
+    m_posMode->addItem(tr("Manual"), QStringLiteral("manual"));
+    m_posMode->addItem(tr("Automatic — follow Omarchy"), QStringLiteral("auto"));
+    qthForm->addRow(tr("Position"), m_posMode);
+    connect(m_posMode, &QComboBox::currentIndexChanged, this, [this]() { applyPositionMode(); });
+
     m_location = new QLineEdit(qth);
     qthForm->addRow(tr("Location"), m_location);
 
@@ -204,11 +214,11 @@ QWidget *PreferencesDialog::buildConnectionTab()
      * knows by heart, and reading them off a map is where a digit goes missing.
      * The lookup fills all three fields at once; the grid square then follows
      * from the textChanged connections above. */
-    auto *lookup = new QPushButton(tr("Find my position…"), qth);
-    lookup->setCursor(Qt::PointingHandCursor);
-    lookup->setToolTip(tr("Look the coordinates up from an address, or take them "
-                          "from your Omarchy weather location."));
-    connect(lookup, &QPushButton::clicked, this, [this]() {
+    m_lookup = new QPushButton(tr("Find my position…"), qth);
+    m_lookup->setCursor(Qt::PointingHandCursor);
+    m_lookup->setToolTip(tr("Look the coordinates up from an address, or take them "
+                            "from your Omarchy weather location."));
+    connect(m_lookup, &QPushButton::clicked, this, [this]() {
         LocationDialog dlg(this);
         if (dlg.exec() != QDialog::Accepted)
             return;
@@ -219,12 +229,13 @@ QWidget *PreferencesDialog::buildConnectionTab()
         m_latitude->setText(QLocale::c().toString(p.latitude, 'f', 6));
         m_longitude->setText(QLocale::c().toString(p.longitude, 'f', 6));
     });
-    qthForm->addRow(QString(), lookup);
+    qthForm->addRow(QString(), m_lookup);
 
-    qthForm->addRow(QString(), hint(
-        tr("Leave both at 0 to publish no position at all. The reflector portal "
-           "then shows no marker, rather than plotting you off the coast of Ghana."),
-        qth));
+    m_posHint = hint(QString(), qth);
+    qthForm->addRow(QString(), m_posHint);
+
+    m_posMode->setCurrentIndex(LocationDialog::autoModeSetting() ? 1 : 0);
+    applyPositionMode();
 
     f->addRow(qth);
     return page;
@@ -565,6 +576,45 @@ PttBinding PreferencesDialog::keyboardBinding()
     return b;
 }
 
+void PreferencesDialog::applyPositionMode()
+{
+    const bool automatic = m_posMode->currentData().toString() == QLatin1String("auto");
+
+    /* Read-only rather than disabled: the numbers still have to be legible,
+     * and a greyed-out field reads as "broken" more than as "not yours". */
+    m_location->setReadOnly(automatic);
+    m_latitude->setReadOnly(automatic);
+    m_longitude->setReadOnly(automatic);
+    m_lookup->setEnabled(!automatic);
+
+    if (!automatic) {
+        Theme::setTone(m_posHint, "");
+        m_posHint->setText(tr("Leave both at 0 to publish no position at all. The reflector "
+                              "portal then shows no marker, rather than plotting you off the "
+                              "coast of Ghana."));
+        return;
+    }
+
+    const LocationDialog::Place p = LocationDialog::omarchyPlace();
+    if (!p.isValid()) {
+        Theme::setTone(m_posHint, "warn");
+        m_posHint->setText(tr("Omarchy has no position stored yet — run "
+                              "omarchy-weather-location, or switch to Manual and look your "
+                              "address up here. Until then no position is published."));
+        return;
+    }
+
+    if (!p.name.isEmpty())
+        m_location->setText(p.name);
+    m_latitude->setText(QLocale::c().toString(p.latitude, 'f', 6));
+    m_longitude->setText(QLocale::c().toString(p.longitude, 'f', 6));
+
+    Theme::setTone(m_posHint, "");
+    m_posHint->setText(tr("Following your Omarchy weather location. Change it with "
+                          "omarchy-weather-location; SVXConnect picks the new position up "
+                          "at its next start."));
+}
+
 void PreferencesDialog::load()
 {
     m_callsign->setText(m_store.value(QStringLiteral("callsign")));
@@ -574,6 +624,9 @@ void PreferencesDialog::load()
     m_location->setText(m_store.value(QStringLiteral("location")));
     m_latitude->setText(m_store.value(QStringLiteral("latitude")));
     m_longitude->setText(m_store.value(QStringLiteral("longitude")));
+
+    m_posMode->setCurrentIndex(LocationDialog::autoModeSetting() ? 1 : 0);
+    applyPositionMode();   /* in automatic mode this overwrites the three above */
 
     m_volume->setValue(m_store.valueInt(QStringLiteral("output_volume_pct")));
     m_micGain->setValue(m_store.valueInt(QStringLiteral("mic_gain")));
@@ -822,6 +875,9 @@ void PreferencesDialog::refreshDeviceLists()
 
 bool PreferencesDialog::commit()
 {
+    LocationDialog::setAutoModeSetting(
+        m_posMode->currentData().toString() == QLatin1String("auto"));
+
     m_store.set(QStringLiteral("callsign"),   m_callsign->text().trimmed());
     m_store.set(QStringLiteral("email"),      m_email->text().trimmed());
     m_store.set(QStringLiteral("reflector"),  m_reflector->text().trimmed());

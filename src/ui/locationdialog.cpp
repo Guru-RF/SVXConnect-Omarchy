@@ -18,12 +18,15 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QSettings>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QUrlQuery>
 #include <QVBoxLayout>
 
 namespace {
+
+constexpr char kAutoMode[] = "location/auto";
 
 /* Nominatim's terms ask for an identifying User-Agent naming the application,
  * and at most one request a second. A dialog where a human types an address and
@@ -110,6 +113,24 @@ LocationDialog::Place LocationDialog::parseOmarchyLocation(const QByteArray &jso
     p.longitude = asDouble(o.value(QStringLiteral("longitude")));
     p.detail    = QCoreApplication::translate("LocationDialog", "from your Omarchy weather location");
     return p;
+}
+
+LocationDialog::Place LocationDialog::omarchyPlace()
+{
+    QFile f(omarchyLocationPath());
+    if (!f.open(QIODevice::ReadOnly))
+        return Place{};
+    return parseOmarchyLocation(f.readAll());
+}
+
+bool LocationDialog::autoModeSetting()
+{
+    return QSettings().value(QLatin1String(kAutoMode), false).toBool();
+}
+
+void LocationDialog::setAutoModeSetting(bool on)
+{
+    QSettings().setValue(QLatin1String(kAutoMode), on);
 }
 
 QUrl LocationDialog::ipLookupUrl()
@@ -319,14 +340,11 @@ void LocationDialog::detect()
 {
     /* The local answer first: Omarchy's own weather location, when the user
      * gave it coordinates. It costs no request and no third party. */
-    QFile f(omarchyLocationPath());
-    if (f.open(QIODevice::ReadOnly)) {
-        const Place p = parseOmarchyLocation(f.readAll());
-        if (p.isValid()) {
-            showPlaces({p});
-            m_status->setText(tr("From your Omarchy weather location."));
-            return;
-        }
+    const Place local = omarchyPlace();
+    if (local.isValid()) {
+        showPlaces({local});
+        m_status->setText(tr("From your Omarchy weather location."));
+        return;
     }
 
     setBusy(true, tr("Asking ipapi.co where this computer is…"));

@@ -28,6 +28,7 @@
 #include "ui/omarchytheme.h"
 #include "ui/preferencesdialog.h"
 #include "ui/locationdialog.h"
+#include "settings/configstore.h"
 
 namespace {
 
@@ -110,6 +111,56 @@ void enforceCNumeric(const char *when)
     if (std::strchr(probe, ',')) {
         log_err("LC_NUMERIC is not C after %s (%.7f formats as \"%s\") — "
                 "node position would be rejected by the reflector", when, 51.05, probe);
+    }
+}
+
+/* Automatic station position: follow Omarchy's weather location.
+ *
+ * Preferences applies it when it is opened, but that is not enough on its own —
+ * someone who runs omarchy-weather-location and then starts the app would be
+ * published at the old position until they happened to open a dialog. So the
+ * check happens at startup as well, and writes the result to svxconnect.conf,
+ * which keeps the CLI in step too.
+ *
+ * Runs before app_new(): the live config can still be changed here without the
+ * talkgroup manager holding indices into it. */
+void syncAutoPosition(svx_config *cfg, const char *confPath)
+{
+    if (!LocationDialog::autoModeSetting())
+        return;
+
+    const LocationDialog::Place p = LocationDialog::omarchyPlace();
+    if (!p.isValid()) {
+        log_warn("automatic position is on, but Omarchy has no location stored "
+                 "(run omarchy-weather-location) — keeping the configured one");
+        return;
+    }
+
+    const QString lat = QString::number(p.latitude,  'f', 7);
+    const QString lon = QString::number(p.longitude, 'f', 7);
+
+    ConfigStore store(cfg, QString::fromUtf8(confPath));
+    if (!p.name.isEmpty())
+        store.set(QStringLiteral("location"), p.name);
+    store.set(QStringLiteral("latitude"),  lat);
+    store.set(QStringLiteral("longitude"), lon);
+
+    if (store.isDirty()) {
+        QString err;
+        if (!store.save(&err)) {
+            log_warn("could not write the Omarchy position to %s: %s",
+                     confPath, qPrintable(err));
+            return;
+        }
+        /* The file is right; the struct was loaded before it changed. */
+        if (!p.name.isEmpty())
+            config_set(cfg, "location", qPrintable(p.name));
+        config_set(cfg, "latitude",  qPrintable(lat));
+        config_set(cfg, "longitude", qPrintable(lon));
+
+        log_info("position follows Omarchy: %s %s, %s",
+                 p.name.isEmpty() ? "(unnamed)" : qPrintable(p.name),
+                 qPrintable(lat), qPrintable(lon));
     }
 }
 
@@ -245,6 +296,8 @@ int main(int argc, char **argv)
     log_info("SVXConnect-Omarchy %s starting (Qt %s)", SVXCONNECT_VERSION, qVersion());
     if (!haveConf) {
         log_warn("no configuration at %s — run 'svxconnect --enroll' first", confPath);
+    } else {
+        syncAutoPosition(&g_cfg, confPath);
     }
 
     /* 6. Layout-only mode: bring the window up without touching the core.

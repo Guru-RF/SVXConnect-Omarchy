@@ -229,17 +229,26 @@ The desktop app reads and writes the same file; its **Edit configuration**
 
 The reflector plots you from latitude and longitude, and the grid square in the
 header is derived from them, so **Preferences → Connection → Station position**
-has a **Find my position…** button rather than expecting you to read
-coordinates off a map:
+offers two modes rather than expecting you to read coordinates off a map.
+
+**Automatic** follows the location you already gave Omarchy for its weather
+panel (`~/.local/state/omarchy/settings/weather.json`, written by
+`omarchy-weather-location`). The three fields show what it resolved to and stop
+being editable; change the location with `omarchy-weather-location` and
+SVXConnect picks it up at its next start, writing it to `svxconnect.conf` so
+the CLI agrees.
+
+**Manual** is the default: type the fields yourself, or press
+**Find my position…** and let the dialog fill them:
 
 - **Look up address** — type street and number, postcode, city and country.
   The lookup goes to OpenStreetMap's [Nominatim][nominatim], the one free
   geocoder that resolves a house number, and offers every match with its
   coordinates so you can pick the right street.
-- **Detect automatically** — reuses the location you already gave Omarchy for
-  its weather panel (`~/.local/state/omarchy/settings/weather.json`, written by
-  `omarchy-weather-location`) when that has coordinates. Failing that it asks
-  ipapi.co, which places you in roughly the right town and says so.
+- **Detect automatically** — takes the Omarchy weather location once, as a
+  starting point, without following it afterwards. When Omarchy has no
+  coordinates it asks ipapi.co, which places you in roughly the right town and
+  says so.
 
 Nothing leaves the machine until you press one of those buttons. Picking a
 result fills the location, latitude and longitude fields, and the grid square
