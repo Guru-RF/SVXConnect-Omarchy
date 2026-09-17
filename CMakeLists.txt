@@ -73,7 +73,7 @@ svx_resolve_version(SVXCONNECT_VERSION)
 # from SVG files generated in the theme's colours, and those load through the
 # Qt SVG image-format plugin.
 # ---------------------------------------------------------------------------
-svx_find_qt6(6.4 COMPONENTS Core Gui Widgets Network WebSockets DBus Svg)
+svx_find_qt6(6.4 COMPONENTS Core Gui Widgets Network WebSockets Sql DBus Svg)
 
 qt_standard_project_setup()
 
@@ -103,9 +103,12 @@ set(APP_SOURCES
     src/ui/configfile.cpp        src/ui/configfile.h
     src/ui/preferencesdialog.cpp src/ui/preferencesdialog.h
     src/ui/locationdialog.cpp    src/ui/locationdialog.h
+    src/ui/talkgroupsdialog.cpp  src/ui/talkgroupsdialog.h
     src/ui/mapview.cpp           src/ui/mapview.h
 
     src/net/reflectorfeed.cpp    src/net/reflectorfeed.h
+    src/net/portalinfo.cpp       src/net/portalinfo.h
+    src/net/qrzlookup.cpp        src/net/qrzlookup.h
 
     src/settings/configstore.cpp src/settings/configstore.h
 
@@ -134,6 +137,7 @@ target_link_libraries(svxconnect-omarchy PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::WebSockets
+    Qt6::Sql
     Qt6::DBus
     Qt6::Svg)
 
@@ -184,6 +188,24 @@ target_compile_definitions(test_reflectorfeed PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_reflectorfeed PRIVATE svxcore Qt6::Core Qt6::WebSockets)
 add_test(NAME reflectorfeed COMMAND test_reflectorfeed)
 
+add_executable(test_portalinfo
+    tests/test_portalinfo.cpp
+    src/net/portalinfo.cpp)
+target_include_directories(test_portalinfo PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_portalinfo PRIVATE
+    SVXCONNECT_VERSION="${SVXCONNECT_VERSION}"
+    QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_portalinfo PRIVATE svxcore Qt6::Core Qt6::Network)
+add_test(NAME portalinfo COMMAND test_portalinfo)
+
+add_executable(test_qrzlookup
+    tests/test_qrzlookup.cpp
+    src/net/qrzlookup.cpp)
+target_include_directories(test_qrzlookup PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_qrzlookup PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_qrzlookup PRIVATE svxcore Qt6::Core Qt6::Sql)
+add_test(NAME qrzlookup COMMAND test_qrzlookup)
+
 add_executable(test_hyprlandbinding
     tests/test_hyprlandbinding.cpp
     src/ptt/hyprlandbinding.cpp)
@@ -218,3 +240,4 @@ message(STATUS "    core        ${CLI_DIR}")
 message(STATUS "    Qt          ${Qt6_VERSION}")
 message(STATUS "    build type  ${CMAKE_BUILD_TYPE}")
 message(STATUS "")
+

@@ -5,12 +5,14 @@
  */
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QEventLoop>
 #include <QMessageBox>
 #include <QSocketNotifier>
 #include <QDir>
 #include <QDebug>
 #include <QIcon>
 #include <QProcess>
+#include <QPushButton>
 #include <QTabWidget>
 #include <QTimer>
 
@@ -196,6 +198,7 @@ void scheduleScreenshot(QApplication &app, MainWindow &w, const QString &confFil
         const int tab = qEnvironmentVariableIntValue("SVX_SCREENSHOT_PREFS", &hasTab);
         if (hasTab) {
             PreferencesDialog dlg(nullptr, confFile, &w);
+            w.attachReflectorInfo(dlg);
             if (auto *tabs = dlg.findChild<QTabWidget *>())
                 tabs->setCurrentIndex(tab);
             dlg.show();
@@ -203,11 +206,39 @@ void scheduleScreenshot(QApplication &app, MainWindow &w, const QString &confFil
             QString prefsShot = shot;
             prefsShot.replace(QStringLiteral(".png"), QStringLiteral("-prefs.png"));
             dlg.grab().save(prefsShot);
+
+            /* SVX_SCREENSHOT_TGPICK=1 also opens "Load from reflector" and
+             * grabs it, which is the only way to see that dialog with real
+             * data: it is modal, so a timer has to photograph it and close it
+             * from underneath the click. */
+            if (qEnvironmentVariableIntValue("SVX_SCREENSHOT_TGPICK") > 0) {
+                if (auto *load = dlg.findChild<QPushButton *>(QStringLiteral("loadFromReflector"))) {
+                    QTimer::singleShot(1200, &app, [shot]() {
+                        const QWidgetList tops = QApplication::topLevelWidgets();
+                        for (QWidget *top : tops) {
+                            if (!top->isVisible() || !top->isModal())
+                                continue;
+                            if (!top->inherits("ReflectorTalkgroupsDialog"))
+                                continue;
+                            QString pickShot = shot;
+                            pickShot.replace(QStringLiteral(".png"), QStringLiteral("-tgpick.png"));
+                            top->grab().save(pickShot);
+                            top->close();
+                        }
+                    });
+                    load->click();
+                }
+            }
         }
         const QString station = qEnvironmentVariable("SVX_SCREENSHOT_STATION");
         if (!station.isEmpty()) {
             w.showStationOnMap(station);
-            QCoreApplication::processEvents();
+            /* A QRZ lookup that is not already cached runs a process and takes
+             * about a second; without this the card is always grabbed before
+             * its answer arrives. */
+            QEventLoop settle;
+            QTimer::singleShot(2500, &settle, &QEventLoop::quit);
+            settle.exec();
             QString mapShot = shot;
             mapShot.replace(QStringLiteral(".png"), QStringLiteral("-station.png"));
             w.grab().save(mapShot);

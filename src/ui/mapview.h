@@ -35,6 +35,7 @@
 #define SVXCONNECT_OMARCHY_MAPVIEW_H
 
 #include <QWidget>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QPixmap>
 #include <QPointF>
@@ -58,6 +59,7 @@ public:
         QString      detail;       /* the short line drawn beside the dot     */
         QString      location;     /* the portal's free text, e.g. "Brugge"   */
         int          tg      = 0;
+        QString      tgName;       /* what the portal calls that talkgroup    */
         QVector<int> monitoredTgs;
         bool         online  = false;
         double       latitude  = 0.0;
@@ -92,6 +94,15 @@ public:
     void setPreferredHeight(int px);
     int  preferredHeight() const { return m_preferredHeight; }
 
+    /* How wide a view "home" means, in kilometres — the macOS app's
+     * mapHomeRadiusKm, and the same default. Only used when nobody is
+     * transmitting. */
+    void setHomeRadiusKm(int km);
+    int  homeRadiusKm() const { return m_homeRadiusKm; }
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
 public slots:
     /* The on-map controls, also reachable from the window's menu. */
     void zoomIn();
@@ -101,9 +112,6 @@ public slots:
      * Ignored when the card has moved on to another station, which is what
      * makes a slow lookup harmless. */
     void setStationInfo(const QString &callsign, const QString &text);
-
-    QSize sizeHint() const override;
-    QSize minimumSizeHint() const override;
 
 signals:
     /* A station was clicked. The window answers with whatever it can find out
@@ -125,6 +133,16 @@ private:
     /* ---- Web Mercator, in tile units at the current zoom ---- */
     static QPointF project(double latitude, double longitude, int zoom);
     static double  latitudeOf(double tileY, int zoom);
+
+    /* The zoom at which `spanMetres` fills `px` pixels at that latitude —
+     * how a camera described in kilometres becomes a slippy zoom level. */
+    static int zoomForSpan(double spanMetres, int px, double latitude);
+    static double metresPerPixel(int zoom, double latitude);
+
+    /* Which talkers have been transmitting long enough to be worth moving the
+     * map for, and the bookkeeping behind that. */
+    void updateTalkerClock();
+    bool followIfNeeded(bool firstMarkers);
 
     QPointF centreTile() const;                 /* map centre, in tile units  */
     QPointF toWidget(double lat, double lon) const;
@@ -175,6 +193,13 @@ private:
     QVector<Marker> m_markers;
 
     int    m_preferredHeight = 0;   /* 0 = the built-in default */
+    int    m_homeRadiusKm    = 100;
+
+    /* callsign -> when it started transmitting, on m_clock's scale. A talker
+     * earns a camera move only after it has been going for a moment; brief
+     * key-ups would otherwise throw the view around. */
+    QHash<QString, qint64> m_talkerSince;
+    QElapsedTimer          m_clock;
 
     double m_latitude  = 50.5;   /* somewhere over Belgium, until told better */
     double m_longitude = 4.5;

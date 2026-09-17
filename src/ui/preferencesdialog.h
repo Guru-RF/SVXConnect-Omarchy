@@ -38,6 +38,8 @@
 class QLineEdit;
 class QSpinBox;
 class QCheckBox;
+class ReflectorFeed;
+class PortalInfo;
 class QComboBox;
 class QLabel;
 class QDialogButtonBox;
@@ -52,6 +54,11 @@ public:
     /* What the desktop reports as bound, for display. On Hyprland the dialog
      * reads the binding itself and this only triggers a refresh. */
     void setCurrentShortcut(const QString &human);
+
+    /* The live feed and the portal's metadata, when the window has them. They
+     * are what "Load from reflector" reads; without them that button is
+     * disabled and says why. */
+    void setReflectorInfo(ReflectorFeed *feed, PortalInfo *portal);
 
     /* PTT settings live in QSettings, not svxconnect.conf: the core has no
      * keys for them and the terminal client cannot use them. */
@@ -77,6 +84,12 @@ private slots:
      * and stop being editable. Called whenever the mode changes. */
     void applyPositionMode();
 
+    /* Fill the two talkgroup fields from what the reflector publishes. Only
+     * possible with an enhanced reflector — a plain one has no idea what its
+     * talkgroups are called or which of them anyone is listening to. */
+    void onLoadFromReflector();
+    void refreshReflectorButton();
+
     void refreshDeviceLists();
     void onBindHyprland();
     void onUnbindHyprland();
@@ -96,6 +109,9 @@ private:
     void applyLiveChanges(const QStringList &changed);
 
     svx_app     *m_app = nullptr;
+    ReflectorFeed *m_feed   = nullptr;
+    PortalInfo    *m_portal = nullptr;
+
     ConfigStore  m_store;
 
     /* Connection */
@@ -126,6 +142,7 @@ private:
     QSpinBox  *m_rogerMin   = nullptr;
 
     /* Talkgroups */
+    QPushButton *m_loadTgs = nullptr;
     QLineEdit *m_switchable = nullptr;
     QLineEdit *m_monitored  = nullptr;
     QSpinBox  *m_defaultTg  = nullptr;
@@ -150,6 +167,7 @@ private:
     QCheckBox *m_notifyTalkers = nullptr;
     QSpinBox  *m_txTimeout  = nullptr;
     QComboBox *m_logLevel   = nullptr;
+    QSpinBox  *m_mapRadius = nullptr;
     QLineEdit *m_ctlFifo    = nullptr;
 
     QDialogButtonBox *m_buttons = nullptr;

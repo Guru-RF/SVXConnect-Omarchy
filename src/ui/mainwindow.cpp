@@ -7,6 +7,8 @@
 #include "ui/activitypanel.h"
 #include "ui/mapview.h"
 #include "net/reflectorfeed.h"
+#include "net/portalinfo.h"
+#include "net/qrzlookup.h"
 #include "ui/theme.h"
 #include "ui/configfile.h"
 #include "ui/preferencesdialog.h"
@@ -197,8 +199,32 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     if (m_app) {
         m_cfg = app_config(m_app);
         m_feed->setReflector(QString::fromUtf8(m_cfg->reflector));
+        m_portal->setReflector(QString::fromUtf8(m_cfg->reflector));
     }
     m_activity->setFeed(m_feed);
+
+    /* The portal's paperwork — talkgroup names and the repeater descriptions
+     * its sysops wrote — and QRZ through ham-tools, if it is installed. Both
+     * are decoration on top of the feed: everything here works without them. */
+    m_portal = new PortalInfo(this);
+    connect(m_portal, &PortalInfo::changed, this, [this]() {
+        refreshMapMarkers();
+        if (!m_stationOpen.isEmpty())
+            sendStationInfo(m_stationOpen);
+    });
+
+    if (QrzLookup::available()) {
+        m_qrz = new QrzLookup(this);
+        connect(m_qrz, &QrzLookup::resolved, this,
+                [this](const QString &home, const QrzLookup::Record &rec) {
+            m_qrzSeen.insert(home, rec);
+            const QString shown = m_qrzFor.value(home);
+            if (!shown.isEmpty())
+                sendStationInfo(shown);
+        });
+        log_info("QRZ lookups available through ham-tools (%s)",
+                 qPrintable(QrzLookup::binaryPath()));
+    }
 
     connect(m_feed, &ReflectorFeed::availabilityChanged, this, [this](bool up) {
         applyMapVisibility();
@@ -417,8 +443,10 @@ void MainWindow::buildUi()
     mapLay->addWidget(mapHandle);
 
     m_map = new MapView(m_mapPane);
+    connect(m_map, &MapView::stationOpened, this, &MainWindow::onStationOpened);
     m_map->setPreferredHeight(
         QSettings().value(QStringLiteral("map/height"), Theme::space(260)).toInt());
+    m_map->setHomeRadiusKm(QSettings().value(QStringLiteral("map/homeRadiusKm"), 100).toInt());
     mapLay->addWidget(m_map, 1);
 
     mapHandle->onDrag = [this](int dy) {
@@ -720,6 +748,7 @@ void MainWindow::refreshMapMarkers()
             MapView::Marker m;
             m.callsign     = n.callsign;
             m.detail       = n.tg > 0 ? tr("TG %1").arg(n.tg) : n.location;
+            m.tgName       = m_portal && n.tg > 0 ? m_portal->talkgroupName(quint32(n.tg)) : QString();
             m.location     = n.location;
             m.tg           = n.tg;
             m.monitoredTgs = n.monitoredTgs;
@@ -759,6 +788,67 @@ void MainWindow::refreshMapMarkers()
               });
 
     m_map->setMarkers(markers);
+}
+
+void MainWindow::onStationOpened(const QString &callsign)
+{
+    m_stationOpen = callsign;
+
+    /* Whatever is already known goes up immediately; QRZ, if it is installed,
+     * fills in underneath when it answers. */
+    sendStationInfo(callsign);
+
+    if (!m_qrz)
+        return;
+    const QString home = QrzLookup::homeCall(callsign);
+    if (home.isEmpty())
+        return;
+    m_qrzFor.insert(home, callsign);
+    m_qrz->lookup(callsign);
+}
+
+void MainWindow::sendStationInfo(const QString &callsign)
+{
+    if (!m_map)
+        return;
+
+    QStringList blocks;
+
+    /* The sysop's own description of the station, from the portal. It is free
+     * text with line breaks and frequencies in it, so it goes up as it was
+     * written rather than reflowed into a sentence. */
+    if (m_portal) {
+        const QString info = m_portal->callsignInfo(callsign);
+        if (!info.isEmpty())
+            blocks << info.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+    }
+
+    const QrzLookup::Record rec = m_qrzSeen.value(QrzLookup::homeCall(callsign));
+    if (rec.isValid()) {
+        QStringList lines;
+
+        QString who = rec.fullName.toHtmlEscaped();
+        if (!rec.licenceClass.isEmpty())
+            who += QStringLiteral(" · %1").arg(rec.licenceClass.toHtmlEscaped());
+        if (!who.trimmed().isEmpty())
+            lines << who;
+
+        QStringList where;
+        if (!rec.city.isEmpty())    where << rec.city.toHtmlEscaped();
+        if (!rec.country.isEmpty()) where << rec.country.toHtmlEscaped();
+        if (!rec.grid.isEmpty())    where << rec.grid.toHtmlEscaped();
+        if (!where.isEmpty())
+            lines << where.join(QStringLiteral(" · "));
+
+        if (!rec.email.isEmpty())
+            lines << QStringLiteral("<a href=\"mailto:%1\">%1</a>").arg(rec.email.toHtmlEscaped());
+
+        if (!lines.isEmpty())
+            blocks << tr("<b>QRZ</b> · %1<br>%2")
+                          .arg(rec.callsign.toHtmlEscaped(), lines.join(QStringLiteral("<br>")));
+    }
+
+    m_map->setStationInfo(callsign, blocks.join(QStringLiteral("<br><br>")));
 }
 
 void MainWindow::resizeEvent(QResizeEvent *e)
@@ -860,6 +950,11 @@ void MainWindow::setConfigPath(const QString &path)
     watchConfig();
 }
 
+void MainWindow::attachReflectorInfo(PreferencesDialog &dlg)
+{
+    dlg.setReflectorInfo(m_feed, m_portal);
+}
+
 bool MainWindow::showStationOnMap(const QString &callsign)
 {
     if (!m_map)
@@ -880,6 +975,8 @@ void MainWindow::setOfflineConfig(const svx_config *cfg)
     m_cfg = cfg;
     if (m_feed)
         m_feed->setReflector(QString::fromUtf8(cfg->reflector));
+    if (m_portal)
+        m_portal->setReflector(QString::fromUtf8(cfg->reflector));
 }
 
 void MainWindow::watchConfig()
@@ -968,6 +1065,7 @@ void MainWindow::onPreferences()
      * changes through the core, and the core is main-thread-only with no
      * re-entrancy guarantees. */
     PreferencesDialog dlg(m_app, m_configPath, this);
+    dlg.setReflectorInfo(m_feed, m_portal);
 
     if (m_pttManager) {
         if (PttBackend *portal = m_pttManager->backend(QStringLiteral("portal")))
@@ -1009,6 +1107,8 @@ void MainWindow::onPreferences()
         m_feed->setEnabled(ReflectorFeed::enabledSetting());
         applyMapVisibility();
     }
+    if (m_map)
+        m_map->setHomeRadiusKm(QSettings().value(QStringLiteral("map/homeRadiusKm"), 100).toInt());
     refreshPttHint();
 }
 

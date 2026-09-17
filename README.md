@@ -136,6 +136,44 @@ When it is not up, nothing changes: the local Recent list stays, and the map
 stays folded. Preferences → Connection has a switch to turn the feed off
 entirely, which is how you see exactly what a plain reflector gives you.
 
+### Talkgroups, from the reflector
+
+Talkgroup numbers are only written down in two places: the reflector's portal,
+and other people's configurations. So **Preferences → Talkgroups → Load from
+reflector…** asks the reflector. It puts together what the portal *names*
+(`talkgroups.json`) and what its nodes are *listening to* right now, and shows
+you the list with a node count against each one — the honest measure of whether
+a talkgroup is worth having, since the portal names some nobody uses and misses
+the ones two stations agreed on last week.
+
+Tick what you want. **Monitor** is everything you want to hear; **Switch** is
+the short list the sidebar cycles through, so ticking Switch ticks Monitor too.
+Priorities you have already set (`8+`, `8++`) survive, and the switch order you
+already had is kept — anything newly ticked joins the end. Talkgroups you have
+configured that this reflector has never heard of stay in the list and stay
+ticked; nothing is silently dropped.
+
+The button is disabled on a plain reflector, which cannot answer the question.
+
+### Station details, and QRZ
+
+Clicking a marker opens what is known about that station: what kind it is,
+where it says it is, the talkgroup it is on and the ones it monitors, its
+coordinates, and — for a repeater the sysop has described in the portal's
+`callsigns.json` — its frequencies and CTCSS tones.
+
+If [ham-tools][ham-tools] is installed and configured, the card also carries
+the operator's QRZ details: name, licence class, town, country, grid square and
+a clickable e-mail address. SVXConnect never sees your QRZ password: it asks
+the `qrz` command, which holds the credentials and keeps its own cache, and
+reads that cache directly (read-only) so a lookup you already did costs nothing.
+Callsigns are reduced to the operator first — `ON3URE-7`, `F/ON3XYZ/P` and
+`ON0CK/ON3TTR` become `ON3URE`, `ON3XYZ` and `ON3TTR` — because that is what
+QRZ has heard of. With ham-tools absent the feature is simply not there: no
+prompts, nothing to configure.
+
+[ham-tools]: https://github.com/Guru-RF/ham-tools
+
 ### The map pane
 
 It lives under the push-to-talk controls and is folded away by default. In its
@@ -146,7 +184,15 @@ half-screen window keeps all its height for the talkgroups and the activity
 list. **Show map** (`Ctrl+M`) opens or closes it explicitly, and that choice
 then sticks.
 
-Drag to pan, scroll to zoom, hover a marker for its callsign and coordinates.
+Drag to pan, scroll to zoom, or use the **+ / − / recentre** controls at the top
+right — `+`, `-` and `0` do the same from the keyboard. Drag the strip above the
+map to resize it. The view follows whoever is transmitting, at 20 km, once they
+have been going for more than a moment; with nobody on the air it sits on your
+own station at the radius set in **Preferences → General → Map home view**
+(100 km by default). Panning or zooming takes the view over until you press
+recentre.
+
+Hover a marker for its callsign and coordinates, or click it for the full card.
 The tiles come from OpenStreetMap, cached on disk between runs; under a dark
 Omarchy theme they are turned over into a dark basemap in the client, because
 the ready-made dark tile services now want an API key and a map that stops

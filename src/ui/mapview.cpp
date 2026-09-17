@@ -18,6 +18,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QPainterPath>
+#include <QSet>
 #include <QStandardPaths>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -31,6 +32,12 @@ constexpr int kTile     = 256;
 constexpr int kMinZoom  = 2;
 constexpr int kMaxZoom  = 12;   /* see the header: countries, not streets */
 constexpr int kMaxFlight = 4;
+
+/* The macOS app's camera, in its own units. A single talker gets a 20 km-wide
+ * view; "home" is whatever the user set, 100 km by default. */
+constexpr double kTalkerSpanM      = 20000.0;
+constexpr qint64 kTalkerQualifyMs  = 1500;    /* before the view will move for it */
+constexpr double kMetresPerDegLat  = 111000.0;
 
 QString keyOf(int z, int x, int y)
 {
@@ -119,6 +126,8 @@ MapView::MapView(QWidget *parent) : QWidget(parent)
 
     buildCard();
 
+    m_clock.start();
+
     m_darkTiles = Theme::palette().dark;
     connect(&OmarchyTheme::get(), &OmarchyTheme::changed, this, [this]() {
         const bool dark = Theme::palette().dark;
@@ -142,6 +151,17 @@ QSize MapView::sizeHint() const
 {
     return QSize(Theme::space(420),
                  m_preferredHeight > 0 ? m_preferredHeight : Theme::space(260));
+}
+
+void MapView::setHomeRadiusKm(int km)
+{
+    const int want = qBound(10, km, 2000);
+    if (want == m_homeRadiusKm)
+        return;
+    m_homeRadiusKm = want;
+    if (!m_userMoved)
+        fitToMarkers();
+    update();
 }
 
 void MapView::setPreferredHeight(int px)
@@ -169,6 +189,25 @@ double MapView::latitudeOf(double tileY, int zoom)
 {
     const double n = 1 << zoom;
     return qRadiansToDegrees(std::atan(std::sinh(M_PI * (1.0 - 2.0 * tileY / n))));
+}
+
+double MapView::metresPerPixel(int zoom, double latitude)
+{
+    return 156543.03392 * std::cos(qDegreesToRadians(qBound(-85.0, latitude, 85.0)))
+         / double(1 << zoom);
+}
+
+int MapView::zoomForSpan(double spanMetres, int px, double latitude)
+{
+    if (spanMetres <= 0.0 || px <= 0)
+        return kMaxZoom;
+    const double mpp = spanMetres / double(px);
+    const double z = std::log2(156543.03392
+                               * std::cos(qDegreesToRadians(qBound(-85.0, latitude, 85.0)))
+                               / mpp);
+    if (!std::isfinite(z))
+        return kMinZoom;
+    return qBound(kMinZoom, int(std::floor(z)), kMaxZoom);
 }
 
 QPointF MapView::centreTile() const
@@ -410,7 +449,8 @@ void MapView::refreshCard()
 
     QStringList lines;
     if (m->tg > 0)
-        lines << tr("On TG %1").arg(m->tg);
+        lines << (m->tgName.isEmpty() ? tr("On TG %1").arg(m->tg)
+                                      : tr("On TG %1 — %2").arg(m->tg).arg(m->tgName));
     if (!m->monitoredTgs.isEmpty()) {
         QStringList tgs;
         for (int tg : m->monitoredTgs)
@@ -479,36 +519,72 @@ void MapView::setMarkers(const QVector<Marker> &markers)
         return true;
     };
 
-    if (same(markers, m_markers)) {
-        refreshControls();
-        return;
-    }
-
+    const bool changed = !same(markers, m_markers);
     const bool hadNone = m_markers.isEmpty();
-    m_markers = markers;
+    if (changed)
+        m_markers = markers;
 
-    if (!m_userMoved) {
-        if (hadNone) {
-            fitToMarkers();
-        } else {
-            /* Someone keyed up outside the visible area: follow them. A talker
-             * already on screen does not move the view — a map that jumps at
-             * every over is unusable, and the marker is right there. */
-            const QRectF visible = QRectF(rect()).adjusted(Theme::space(20), Theme::space(20),
-                                                           -Theme::space(20), -Theme::space(20));
-            for (const Marker &m : m_markers) {
-                if (m.talking && !visible.contains(toWidget(m.latitude, m.longitude))) {
-                    fitToMarkers();
-                    break;
-                }
-            }
-        }
-    }
+    /* Run even when nothing changed: a talker qualifies for a camera move by
+     * the passage of time, not by a new message, and the caller ticks this
+     * every half second. */
+    updateTalkerClock();
+    const bool moved = followIfNeeded(hadNone && changed);
 
     refreshControls();
-    refreshCard();
-    placeCard();
-    update();
+    if (changed) {
+        refreshCard();
+        placeCard();
+    }
+    if (changed || moved)
+        update();
+}
+
+void MapView::updateTalkerClock()
+{
+    const qint64 now = m_clock.elapsed();
+
+    QSet<QString> talking;
+    for (const Marker &m : m_markers) {
+        if (!m.talking)
+            continue;
+        talking.insert(m.callsign);
+        if (!m_talkerSince.contains(m.callsign))
+            m_talkerSince.insert(m.callsign, now);
+    }
+
+    for (auto it = m_talkerSince.begin(); it != m_talkerSince.end(); ) {
+        if (talking.contains(it.key())) ++it;
+        else it = m_talkerSince.erase(it);
+    }
+}
+
+bool MapView::followIfNeeded(bool firstMarkers)
+{
+    if (m_userMoved || m_markers.isEmpty())
+        return false;
+
+    if (firstMarkers) {
+        fitToMarkers();
+        return true;
+    }
+
+    /* Someone has been transmitting for a moment and cannot be seen: go to
+     * them. A talker already on screen does not move the view — the marker is
+     * right there, and a map that jumps at every over is unusable. */
+    const qint64 now = m_clock.elapsed();
+    const QRectF visible = QRectF(rect()).adjusted(Theme::space(20), Theme::space(20),
+                                                   -Theme::space(20), -Theme::space(20));
+    for (const Marker &m : m_markers) {
+        if (!m.talking)
+            continue;
+        if (now - m_talkerSince.value(m.callsign, now) < kTalkerQualifyMs)
+            continue;
+        if (!visible.contains(toWidget(m.latitude, m.longitude))) {
+            fitToMarkers();
+            return true;
+        }
+    }
+    return false;
 }
 
 void MapView::fitToMarkers()
@@ -518,27 +594,36 @@ void MapView::fitToMarkers()
 
     /* What to look at, in order of what anyone actually wants to see:
      *
-     *   1. whoever is transmitting;
-     *   2. failing that, your own station and its surroundings;
+     *   1. whoever has been transmitting for more than a moment;
+     *   2. failing that, your own station, at the home radius;
      *   3. failing that, everything.
      *
-     * Fitting everything sounds neutral and is not: one station on holiday in
-     * Egypt and one placeholder in Sweden are enough to zoom a Belgian
-     * reflector out to a view of the Atlantic. */
+     * The spans are the macOS app's, converted from its MapKit regions: a
+     * single talker gets a 20 km-wide view, home gets whatever the home radius
+     * setting says. Fitting everything sounds neutral and is not — one station
+     * on holiday in Egypt and one placeholder in Sweden are enough to zoom a
+     * Belgian reflector out to a view of the Atlantic. */
+    const qint64 now = m_clock.elapsed();
+
     QVector<Marker> subject;
     for (const Marker &m : m_markers)
-        if (m.talking) subject.append(m);
+        if (m.talking && now - m_talkerSince.value(m.callsign, now) >= kTalkerQualifyMs)
+            subject.append(m);
 
-    double padLat = 0.35, padLon = 0.5;    /* ≈ 40 km around a talker */
+    double minSpanM = kTalkerSpanM;
+    double widen    = 1.5;
+    bool   everything = false;
+
     if (subject.isEmpty()) {
         for (const Marker &m : m_markers)
             if (m.self) subject.append(m);
-        padLat = 1.1; padLon = 1.7;        /* ≈ 120 km around home    */
+        minSpanM = double(m_homeRadiusKm) * 1000.0;
+        widen    = 1.0;
     }
-    bool everything = false;
     if (subject.isEmpty()) {
-        subject = m_markers;
-        padLat = 0.3; padLon = 0.45;
+        subject    = m_markers;
+        minSpanM   = kTalkerSpanM;
+        widen      = 1.4;
         everything = true;
     }
 
@@ -547,9 +632,9 @@ void MapView::fitToMarkers()
     if (everything && subject.size() >= 8) {
         /* Where most of the stations are, not where the two furthest ones are.
          * A reflector's list always has a few of those — a holiday in Egypt, a
-         * node someone left at a placeholder in Sweden — and fitting the
-         * extremes puts a Belgian network on a map of three continents. The
-         * middle 90% is the network; the rest is a pan away. */
+         * node left at a placeholder in Sweden — and fitting the extremes puts
+         * a Belgian network on a map of three continents. The middle 90% is
+         * the network; the rest is a pan away. */
         QVector<double> lats, lons;
         lats.reserve(subject.size());
         lons.reserve(subject.size());
@@ -560,8 +645,8 @@ void MapView::fitToMarkers()
         std::sort(lats.begin(), lats.end());
         std::sort(lons.begin(), lons.end());
 
-        const int lo = subject.size() / 20;              /* 5th percentile  */
-        const int hi = subject.size() - 1 - lo;          /* 95th            */
+        const int lo = subject.size() / 20;              /* 5th percentile */
+        const int hi = subject.size() - 1 - lo;          /* 95th           */
         south = lats[lo]; north = lats[hi];
         west  = lons[lo]; east  = lons[hi];
     } else {
@@ -576,27 +661,15 @@ void MapView::fitToMarkers()
     m_latitude  = (north + south) / 2.0;
     m_longitude = (east + west) / 2.0;
 
-    /* Widen the box so a single marker does not ask for the maximum zoom. */
-    north += padLat; south -= padLat;
-    east  += padLon; west  -= padLon;
+    /* The box in metres, widened, and never tighter than the minimum span for
+     * this kind of view. */
+    const double cosLat = qMax(std::cos(qDegreesToRadians(m_latitude)), 0.1);
+    const double spanLatM = qMax((north - south) * kMetresPerDegLat * widen, minSpanM);
+    const double spanLonM = qMax((east - west) * kMetresPerDegLat * cosLat * widen, minSpanM);
 
-    int zoom = kMinZoom;
-    for (int z = kMaxZoom; z >= kMinZoom; --z) {
-        const QPointF a = project(north, west, z);
-        const QPointF b = project(south, east, z);
-        const double w = qAbs(b.x() - a.x()) * kTile;
-        const double h = qAbs(b.y() - a.y()) * kTile;
-        /* The floors matter: in a short pane the height test alone would drop
-         * the zoom until a country fits in eighty pixels, which is how a map of
-         * Belgium ends up showing the Atlantic. */
-        const double marginW = qMax(width()  - Theme::space(60), Theme::space(220));
-        const double marginH = qMax(height() - Theme::space(50), Theme::space(150));
-        if (w <= marginW && h <= marginH) {
-            zoom = z;
-            break;
-        }
-    }
-    m_zoom = qBound(kMinZoom, zoom, kMaxZoom);
+    m_zoom = qMin(zoomForSpan(spanLatM, height(), m_latitude),
+                  zoomForSpan(spanLonM, width(),  m_latitude));
+    refreshControls();
     update();
 }
 
@@ -744,6 +817,50 @@ void MapView::paintEvent(QPaintEvent *)
         if (at.x() < -50 || at.y() < -50 || at.x() > width() + 50 || at.y() > height() + 50)
             continue;
         drawMarker(p, m, at, i == m_hovered);
+    }
+
+    /* ---- scale bar, bottom left ----
+     * A map with no sense of distance is a picture. The bar is a round number
+     * of metres — 1, 2 or 5 times a power of ten — drawn at whatever pixel
+     * length that works out to here. */
+    {
+        const double mpp = metresPerPixel(m_zoom, m_latitude);
+        const double maxPx = qMin(double(width()) * 0.3, double(Theme::space(140)));
+
+        static const double kLadder[] = {
+            10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000,
+            20000, 50000, 100000, 200000, 500000, 1000000, 2000000, 5000000,
+        };
+        double metres = kLadder[0];
+        for (double candidate : kLadder) {
+            if (candidate / mpp > maxPx)
+                break;
+            metres = candidate;
+        }
+
+        const int barPx = int(metres / mpp);
+        if (barPx >= Theme::space(30)) {
+            const QString text = metres >= 1000.0
+                ? tr("%1 km").arg(metres / 1000.0, 0, 'g', 3)
+                : tr("%1 m").arg(int(metres));
+
+            const QFont f = Theme::font(Theme::Font::Caption);
+            const QFontMetrics fm(f);
+            const int x = Theme::space(10);
+            const int y = height() - Theme::space(12);
+
+            QPen pen(Theme::wash(pal.foreground, 0.75));
+            pen.setWidthF(1.4);
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            p.drawLine(x, y, x + barPx, y);
+            p.drawLine(x, y - Theme::space(3), x, y);
+            p.drawLine(x + barPx, y - Theme::space(3), x + barPx, y);
+
+            p.setFont(f);
+            p.setPen(Theme::wash(pal.foreground, 0.75));
+            p.drawText(x, y - Theme::space(5), text);
+        }
     }
 
     /* ---- attribution, which is a licence condition and not decoration ---- */

@@ -33,6 +33,9 @@
 #include <QMainWindow>
 
 #include "core/svxcore.h"
+#include "net/qrzlookup.h"
+
+#include <QHash>
 
 class QLabel;
 class QPushButton;
@@ -50,6 +53,9 @@ class ConnectionBar;
 class Sidebar;
 class ActivityPanel;
 class MapView;
+class PortalInfo;
+class PreferencesDialog;
+class QrzLookup;
 class ReflectorFeed;
 
 class MainWindow : public QMainWindow {
@@ -76,6 +82,11 @@ public:
      * and by the documentation screenshots. False when the map has no position
      * for that callsign. */
     bool showStationOnMap(const QString &callsign);
+
+    /* Hand a Preferences dialog the reflector information this window holds.
+     * onPreferences() does it for the real one; the documentation screenshots
+     * build their own and need the same. */
+    void attachReflectorInfo(PreferencesDialog &dlg);
 
 public slots:
     /* Connected to CoreLoop::coreChanged() — a hint, not the primary path. */
@@ -130,6 +141,11 @@ private:
      * menu item switches to an explicit on or off, and that choice sticks. */
     void applyMapVisibility();
     void refreshMapMarkers();
+
+    /* A station's card was opened: answer with everything this client can find
+     * out about the callsign that the reflector itself does not publish. */
+    void onStationOpened(const QString &callsign);
+    void sendStationInfo(const QString &callsign);
     QString mapMode() const;
     void setMapMode(const QString &mode);
     void applyPttBindings();
@@ -146,6 +162,8 @@ private:
     Sidebar        *m_sidebar   = nullptr;
     ActivityPanel  *m_activity  = nullptr;
     ReflectorFeed  *m_feed      = nullptr;
+    PortalInfo     *m_portal    = nullptr;
+    QrzLookup      *m_qrz       = nullptr;
     MapView        *m_map       = nullptr;
     QWidget        *m_mapPane   = nullptr;   /* map + its rule, shown as one */
     QTimer         *m_mapTick   = nullptr;   /* 500 ms while the map is up   */
@@ -174,6 +192,12 @@ private:
 
     /* What the portal reports as bound, on desktops where it knows. */
     QString m_portalTrigger;
+
+    /* home call -> the callsign the card is open on, so an answer that arrives
+     * for ON3TTR can be shown against ON0CK/ON3TTR. */
+    QHash<QString, QString> m_qrzFor;
+    QHash<QString, QrzLookup::Record> m_qrzSeen;
+    QString m_stationOpen;   /* the callsign whose card is open, if any */
 
     quint64 m_lastLogSerial = 0;
     bool    m_lastTxActive  = false;

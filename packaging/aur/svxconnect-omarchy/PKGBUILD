@@ -19,7 +19,8 @@ depends=("svxconnect>=$_cliver" qt6-base qt6-svg qt6-websockets qt6-wayland open
          hicolor-icon-theme xdg-desktop-portal)
 makedepends=(cmake)
 optdepends=('xdg-desktop-portal-hyprland: global push-to-talk on Hyprland'
-            'alsa-lib: audio without PulseAudio or PipeWire')
+            'alsa-lib: audio without PulseAudio or PipeWire'
+            'ham-tools: operator details from QRZ on the map')
 # GitHub's tag archives leave submodules empty, so the reflector core is
 # fetched as its own tarball and handed to CMake with CLI_DIR.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"

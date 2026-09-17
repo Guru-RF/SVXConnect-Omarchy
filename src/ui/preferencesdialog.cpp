@@ -9,6 +9,8 @@
 #include "ui/notifier.h"
 #include "ui/locationdialog.h"
 #include "net/reflectorfeed.h"
+#include "net/portalinfo.h"
+#include "ui/talkgroupsdialog.h"
 
 #include <QSettings>
 #include <QTabWidget>
@@ -28,6 +30,7 @@
 #include <QRegularExpressionValidator>
 #include <QDoubleValidator>
 #include <QGuiApplication>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QApplication>
 
@@ -248,11 +251,6 @@ QWidget *PreferencesDialog::buildConnectionTab()
     m_posHint = hint(QString(), qth);
     qthForm->addRow(QString(), m_posHint);
 
-    m_enhanced->setChecked(ReflectorFeed::enabledSetting());
-
-    m_posMode->setCurrentIndex(LocationDialog::autoModeSetting() ? 1 : 0);
-    applyPositionMode();
-
     f->addRow(qth);
     return page;
 }
@@ -376,6 +374,16 @@ QWidget *PreferencesDialog::buildTalkgroupsTab()
            "8 is normal, 8+ is higher, 8++ is highest. A talker on a "
            "higher-priority talkgroup moves you to it automatically."), page));
 
+    /* The reflector knows what its own talkgroups are called and which ones
+     * anyone is listening to. Typing those numbers from memory is how a
+     * configuration ends up monitoring a talkgroup that was renumbered last
+     * year. */
+    m_loadTgs = new QPushButton(tr("Load from reflector…"), page);
+    m_loadTgs->setObjectName(QStringLiteral("loadFromReflector"));
+    m_loadTgs->setCursor(Qt::PointingHandCursor);
+    connect(m_loadTgs, &QPushButton::clicked, this, &PreferencesDialog::onLoadFromReflector);
+    f->addRow(QString(), m_loadTgs);
+
     auto updatePreview = [this]() {
         svx_tg_entry v[SVX_MAX_TG];
         const int n = tglist_parse(qPrintable(m_monitored->text()), v, SVX_MAX_TG);
@@ -426,6 +434,145 @@ QWidget *PreferencesDialog::buildTalkgroupsTab()
     f->addRow(tr("Sidebar order"), m_tgOrder);
 
     return page;
+}
+
+void PreferencesDialog::setReflectorInfo(ReflectorFeed *feed, PortalInfo *portal)
+{
+    m_feed   = feed;
+    m_portal = portal;
+    refreshReflectorButton();
+}
+
+void PreferencesDialog::refreshReflectorButton()
+{
+    if (!m_loadTgs)
+        return;
+
+    const bool live   = m_feed && m_feed->isAvailable();
+    const bool named  = m_portal && m_portal->hasTalkgroups();
+    m_loadTgs->setEnabled(live || named);
+    m_loadTgs->setToolTip(live || named
+        ? tr("Pick from the talkgroups this reflector names, and the ones its nodes "
+             "are listening to right now.")
+        : tr("Only an enhanced reflector can answer this — a plain one does not "
+             "publish its talkgroups."));
+}
+
+void PreferencesDialog::onLoadFromReflector()
+{
+    /* Two sources, and both are needed. The portal names talkgroups but lists
+     * only the official ones; the feed knows what nodes are actually listening
+     * to, including the ones two people agreed on last week. */
+    QHash<quint32, int> nodeCount;
+    if (m_feed) {
+        const QHash<QString, ReflectorFeed::Node> &nodes = m_feed->nodes();
+        for (auto it = nodes.cbegin(); it != nodes.cend(); ++it)
+            for (int tg : it.value().monitoredTgs)
+                if (tg > 0)
+                    nodeCount[quint32(tg)] += 1;
+    }
+
+    const QHash<quint32, QString> names = m_portal ? m_portal->talkgroups()
+                                                   : QHash<quint32, QString>();
+
+    /* What is configured now, priorities and cycle order included. */
+    svx_tg_entry mon[SVX_MAX_TG];
+    svx_tg_entry sw[SVX_MAX_TG];
+    const int nMon = tglist_parse(qPrintable(m_monitored->text()),  mon, SVX_MAX_TG);
+    const int nSw  = tglist_parse(qPrintable(m_switchable->text()), sw,  SVX_MAX_TG);
+
+    QHash<quint32, int> priority;
+    QSet<quint32> isMon, isSw;
+    QList<quint32> swOrder;
+    for (int i = 0; i < qMax(0, nMon); ++i) {
+        priority.insert(mon[i].id, mon[i].priority);
+        isMon.insert(mon[i].id);
+    }
+    for (int i = 0; i < qMax(0, nSw); ++i) {
+        isSw.insert(sw[i].id);
+        swOrder.append(sw[i].id);
+    }
+
+    /* Never silently drop what the operator already has, even if this
+     * reflector has never heard of it. */
+    QSet<quint32> ids;
+    for (auto it = names.cbegin(); it != names.cend(); ++it) ids.insert(it.key());
+    for (auto it = nodeCount.cbegin(); it != nodeCount.cend(); ++it) ids.insert(it.key());
+    ids.unite(isMon);
+    ids.unite(isSw);
+
+    if (ids.isEmpty()) {
+        QMessageBox::information(this, tr("Nothing to load"),
+            tr("The reflector published no talkgroups. Either it is not an enhanced "
+               "reflector, or its portal is not answering."));
+        return;
+    }
+
+    QList<ReflectorTalkgroupsDialog::Entry> entries;
+    entries.reserve(ids.size());
+    for (quint32 id : std::as_const(ids)) {
+        ReflectorTalkgroupsDialog::Entry e;
+        e.id         = id;
+        e.name       = names.value(id);
+        e.nodes      = nodeCount.value(id, 0);
+        e.monitored  = isMon.contains(id);
+        e.switchable = isSw.contains(id);
+        entries.append(e);
+    }
+
+    /* Busiest first: on a reflector with eighteen named talkgroups, the three
+     * anyone uses should not be somewhere in the middle of an ordered list. */
+    std::sort(entries.begin(), entries.end(),
+              [](const ReflectorTalkgroupsDialog::Entry &a,
+                 const ReflectorTalkgroupsDialog::Entry &b) {
+                  if (a.nodes != b.nodes) return a.nodes > b.nodes;
+                  return a.id < b.id;
+              });
+
+    ReflectorTalkgroupsDialog dlg(entries, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    const QList<ReflectorTalkgroupsDialog::Entry> chosen = dlg.chosen();
+
+    /* Monitored: by number, with whatever priority was already set kept. */
+    QList<quint32> monitored;
+    QList<quint32> switchable;
+    for (const ReflectorTalkgroupsDialog::Entry &e : chosen) {
+        if (e.monitored)  monitored.append(e.id);
+        if (e.switchable) switchable.append(e.id);
+    }
+    std::sort(monitored.begin(), monitored.end());
+    if (monitored.size() > SVX_MAX_TG)
+        monitored.resize(SVX_MAX_TG);
+
+    QStringList monParts;
+    for (quint32 id : std::as_const(monitored)) {
+        const int p = qBound(0, priority.value(id, 0), SVX_MAX_PRIO);
+        monParts << QString::number(id) + QString(p, QLatin1Char('+'));
+    }
+
+    /* Switchable: the cycle keeps the order it had, and anything newly ticked
+     * joins the end. Re-sorting it would silently rearrange the sidebar. */
+    QList<quint32> ordered;
+    for (quint32 id : std::as_const(swOrder))
+        if (switchable.contains(id) && !ordered.contains(id))
+            ordered.append(id);
+    std::sort(switchable.begin(), switchable.end());
+    for (quint32 id : std::as_const(switchable))
+        if (!ordered.contains(id))
+            ordered.append(id);
+    if (ordered.size() > SVX_MAX_TG)
+        ordered.resize(SVX_MAX_TG);
+
+    QStringList swParts;
+    for (quint32 id : std::as_const(ordered))
+        swParts << QString::number(id);
+
+    /* ", " is what the core's own tglist_format() writes, so a list that did
+     * not really change compares equal and the file is left alone. */
+    m_monitored->setText(monParts.join(QStringLiteral(", ")));
+    m_switchable->setText(swParts.join(QStringLiteral(", ")));
 }
 
 QWidget *PreferencesDialog::buildPttTab()
@@ -572,6 +719,18 @@ QWidget *PreferencesDialog::buildGeneralTab()
         tr("A named pipe for scripts, a foot switch, or a key binding. "
            "Clearing this disables it."), page));
 
+    /* How wide "home" is on the map. A desktop setting, not a config key: the
+     * terminal client has no map and would warn about a key it does not
+     * know. */
+    m_mapRadius = new QSpinBox(page);
+    m_mapRadius->setRange(10, 2000);
+    m_mapRadius->setSingleStep(25);
+    m_mapRadius->setSuffix(tr(" km"));
+    f->addRow(tr("Map home view"), m_mapRadius);
+    f->addRow(QString(), hint(
+        tr("How much of the map to show around your own station when nobody is "
+           "transmitting. A talker always pulls the view to itself, at 20 km."), page));
+
     return page;
 }
 
@@ -643,6 +802,10 @@ void PreferencesDialog::load()
 
     m_posMode->setCurrentIndex(LocationDialog::autoModeSetting() ? 1 : 0);
     applyPositionMode();   /* in automatic mode this overwrites the three above */
+
+    m_enhanced->setChecked(ReflectorFeed::enabledSetting());
+    refreshReflectorButton();
+    m_mapRadius->setValue(QSettings().value(QStringLiteral("map/homeRadiusKm"), 100).toInt());
 
     m_volume->setValue(m_store.valueInt(QStringLiteral("output_volume_pct")));
     m_micGain->setValue(m_store.valueInt(QStringLiteral("mic_gain")));
@@ -894,6 +1057,7 @@ bool PreferencesDialog::commit()
     LocationDialog::setAutoModeSetting(
         m_posMode->currentData().toString() == QLatin1String("auto"));
     ReflectorFeed::setEnabledSetting(m_enhanced->isChecked());
+    QSettings().setValue(QStringLiteral("map/homeRadiusKm"), m_mapRadius->value());
 
     m_store.set(QStringLiteral("callsign"),   m_callsign->text().trimmed());
     m_store.set(QStringLiteral("email"),      m_email->text().trimmed());
