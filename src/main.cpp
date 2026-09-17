@@ -172,7 +172,8 @@ void syncAutoPosition(svx_config *cfg, const char *confPath)
  * how the header row's behaviour at narrow widths is checked.
  * SVX_SCREENSHOT_PREFS=<tab index> also renders the preferences dialog on that
  * tab, as <file>-prefs.png, and SVX_SCREENSHOT_LOCATION=1 the position lookup,
- * as <file>-location.png. */
+ * as <file>-location.png. SVX_SCREENSHOT_DELAY=<ms> waits longer before
+ * grabbing, which the map needs. */
 void scheduleScreenshot(QApplication &app, MainWindow &w, const QString &confFile)
 {
     const QString shot = qEnvironmentVariable("SVX_SCREENSHOT");
@@ -184,7 +185,11 @@ void scheduleScreenshot(QApplication &app, MainWindow &w, const QString &confFil
     if (x > 0)
         w.resize(size.left(x).toInt(), size.mid(x + 1).toInt());
 
-    QTimer::singleShot(900, &app, [&w, &app, shot, confFile]() {
+    /* 900 ms is enough for a window that draws itself. The map is not that:
+     * it waits for a WebSocket snapshot and then for tiles over the network,
+     * so a run that wants the map in the picture asks for longer. */
+    const int delay = qEnvironmentVariableIntValue("SVX_SCREENSHOT_DELAY");
+    QTimer::singleShot(delay > 0 ? delay : 900, &app, [&w, &app, shot, confFile]() {
         w.grab().save(shot);
         bool hasTab = false;
         const int tab = qEnvironmentVariableIntValue("SVX_SCREENSHOT_PREFS", &hasTab);
@@ -307,6 +312,7 @@ int main(int argc, char **argv)
         log_warn("SVX_WINDOW_ONLY set — the reflector core will not be started");
         MainWindow w(nullptr);
         w.setConfigPath(QString::fromUtf8(confPath));
+        w.setReflectorHost(QString::fromUtf8(g_cfg.reflector));
         w.show();
 
         scheduleScreenshot(app, w, QString::fromUtf8(confPath));

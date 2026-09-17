@@ -23,7 +23,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-              git cmake qt6-base qt6-svg qt6-wayland opus openssl ncurses
+              git cmake qt6-base qt6-svg qt6-websockets qt6-wayland opus openssl ncurses
 
       - uses: actions/checkout@v4
         with:

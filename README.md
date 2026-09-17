@@ -106,6 +106,50 @@ hl.bind("F12", hl.dsp.exec_cmd("echo 'ptt on' > ~/.local/state/svxconnect/ctl"))
 hl.bind("F12", hl.dsp.exec_cmd("echo 'ptt off' > ~/.local/state/svxconnect/ctl"), { release = true })
 ```
 
+## The enhanced reflector, and the map
+
+A plain SvxLink reflector tells you who is talking on the talkgroups you
+monitor, from the moment you connect. It does not know where anybody is, and it
+remembers nothing — a station that keyed up two minutes before you connected
+never happened as far as your client is concerned.
+
+Some reflectors run a portal alongside them that publishes the same traffic as
+JSON over a WebSocket, with node positions and a rolling 24 hours of history.
+SVXConnect finds it by itself: there is nothing to configure and no extra host
+to type. It derives the URL from the reflector you already gave it —
+`be.svx.link` becomes `wss://reflector.be.svx.link/` — connects, and waits five
+seconds for the portal's opening snapshot. If one arrives, this is an enhanced
+reflector; if not, it is a plain one, and the client retries every fifteen
+seconds in case the portal comes back.
+
+When the feed is up:
+
+- **Recent** is replaced by **Reflector · 24h**, the portal's own history. It
+  covers *every* talkgroup the reflector saw, not only the ones you monitor,
+  and it goes back before you connected. Rows still switch talkgroup when
+  clicked.
+- **the map** has something to draw: one marker per node the reflector knows
+  the position of, the current talker highlighted and labelled, and your own
+  station marked separately.
+
+When it is not up, nothing changes: the local Recent list stays, and the map
+stays folded. Preferences → Connection has a switch to turn the feed off
+entirely, which is how you see exactly what a plain reflector gives you.
+
+### The map pane
+
+It lives under the push-to-talk controls and is folded away by default. In its
+automatic mode it folds out when there is both something to show and room to
+show it — roughly a window taller than 700 px, so a tiled half-screen window
+keeps all its height for the talkgroups and the activity list. **Show map**
+(`Ctrl+M`) opens or closes it explicitly, and that choice then sticks.
+
+Drag to pan, scroll to zoom, hover a marker for its callsign and coordinates.
+The tiles come from OpenStreetMap, cached on disk between runs; under a dark
+Omarchy theme they are turned over into a dark basemap in the client, because
+the ready-made dark tile services now want an API key and a map that stops
+working when a key expires is worse than no map.
+
 ## Installing
 
 Every way below installs two packages. `svxconnect-omarchy` is the desktop app,
@@ -168,7 +212,7 @@ cd ../svxconnect-omarchy && makepkg -si
 ## Building
 
 ```sh
-sudo pacman -S --needed base-devel cmake qt6-base qt6-svg qt6-wayland opus openssl
+sudo pacman -S --needed base-devel cmake qt6-base qt6-svg qt6-websockets qt6-wayland opus openssl
 
 git clone --recurse-submodules https://github.com/Guru-RF/SVXConnect-Omarchy
 cd SVXConnect-Omarchy

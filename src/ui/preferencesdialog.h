@@ -103,6 +103,7 @@ private:
     QLineEdit *m_email     = nullptr;
     QLineEdit *m_reflector = nullptr;
     QSpinBox  *m_port      = nullptr;
+    QCheckBox   *m_enhanced  = nullptr;
     QComboBox   *m_posMode   = nullptr;
     QLineEdit   *m_location  = nullptr;
     QLineEdit   *m_latitude  = nullptr;

@@ -73,7 +73,7 @@ svx_resolve_version(SVXCONNECT_VERSION)
 # from SVG files generated in the theme's colours, and those load through the
 # Qt SVG image-format plugin.
 # ---------------------------------------------------------------------------
-svx_find_qt6(6.4 COMPONENTS Core Gui Widgets Network DBus Svg)
+svx_find_qt6(6.4 COMPONENTS Core Gui Widgets Network WebSockets DBus Svg)
 
 qt_standard_project_setup()
 
@@ -103,6 +103,9 @@ set(APP_SOURCES
     src/ui/configfile.cpp        src/ui/configfile.h
     src/ui/preferencesdialog.cpp src/ui/preferencesdialog.h
     src/ui/locationdialog.cpp    src/ui/locationdialog.h
+    src/ui/mapview.cpp           src/ui/mapview.h
+
+    src/net/reflectorfeed.cpp    src/net/reflectorfeed.h
 
     src/settings/configstore.cpp src/settings/configstore.h
 
@@ -130,6 +133,7 @@ target_link_libraries(svxconnect-omarchy PRIVATE
     svxcore
     Qt6::Widgets
     Qt6::Network
+    Qt6::WebSockets
     Qt6::DBus
     Qt6::Svg)
 
@@ -171,6 +175,14 @@ target_compile_definitions(test_locationlookup PRIVATE
 target_link_libraries(test_locationlookup PRIVATE
     svxcore Qt6::Widgets Qt6::Network Qt6::Svg)
 add_test(NAME locationlookup COMMAND test_locationlookup)
+
+add_executable(test_reflectorfeed
+    tests/test_reflectorfeed.cpp
+    src/net/reflectorfeed.cpp)
+target_include_directories(test_reflectorfeed PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_reflectorfeed PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_reflectorfeed PRIVATE svxcore Qt6::Core Qt6::WebSockets)
+add_test(NAME reflectorfeed COMMAND test_reflectorfeed)
 
 add_executable(test_hyprlandbinding
     tests/test_hyprlandbinding.cpp

@@ -8,6 +8,7 @@
 #include "ptt/hyprlandbinding.h"
 #include "ui/notifier.h"
 #include "ui/locationdialog.h"
+#include "net/reflectorfeed.h"
 
 #include <QSettings>
 #include <QTabWidget>
@@ -157,6 +158,19 @@ QWidget *PreferencesDialog::buildConnectionTab()
         tr("The host is looked up by SRV record first, so the port is usually "
            "discovered automatically and this is only the fallback."), page));
 
+    /* The enhanced reflector. Not a host to type: it is derived from the one
+     * above, probed for, and either there or not. */
+    m_enhanced = new QCheckBox(tr("Use the reflector's portal feed when it has one"), page);
+    m_enhanced->setToolTip(tr("Looks for a portal at wss://reflector.%1/")
+                               .arg(tr("<your reflector>")));
+    f->addRow(QString(), m_enhanced);
+    f->addRow(QString(), hint(
+        tr("Some reflectors publish their traffic and their nodes' positions over a "
+           "WebSocket. When one does, Recent is replaced by the reflector's own 24-hour "
+           "history — which covers every talkgroup, not only the ones you monitor — and "
+           "the map has something to show. Turn this off to see exactly what a plain "
+           "reflector gives you."), page));
+
     auto *qth = new QGroupBox(tr("Station position"), page);
     auto *qthForm = new QFormLayout(qth);
     qthForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
@@ -233,6 +247,8 @@ QWidget *PreferencesDialog::buildConnectionTab()
 
     m_posHint = hint(QString(), qth);
     qthForm->addRow(QString(), m_posHint);
+
+    m_enhanced->setChecked(ReflectorFeed::enabledSetting());
 
     m_posMode->setCurrentIndex(LocationDialog::autoModeSetting() ? 1 : 0);
     applyPositionMode();
@@ -877,6 +893,7 @@ bool PreferencesDialog::commit()
 {
     LocationDialog::setAutoModeSetting(
         m_posMode->currentData().toString() == QLatin1String("auto"));
+    ReflectorFeed::setEnabledSetting(m_enhanced->isChecked());
 
     m_store.set(QStringLiteral("callsign"),   m_callsign->text().trimmed());
     m_store.set(QStringLiteral("email"),      m_email->text().trimmed());

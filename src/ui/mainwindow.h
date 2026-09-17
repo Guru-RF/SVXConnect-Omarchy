@@ -49,6 +49,8 @@ class Notifier;
 class ConnectionBar;
 class Sidebar;
 class ActivityPanel;
+class MapView;
+class ReflectorFeed;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -64,6 +66,11 @@ public:
      * may have taken it from -c. */
     void setConfigPath(const QString &path);
 
+    /* The reflector host, for the portal probe. With a core this comes from
+     * the live configuration; SVX_WINDOW_ONLY has no core, and main() passes
+     * it in so the feed and the map can still be exercised without one. */
+    void setReflectorHost(const QString &host);
+
 public slots:
     /* Connected to CoreLoop::coreChanged() — a hint, not the primary path. */
     void onCoreChanged();
@@ -77,6 +84,8 @@ signals:
 
 protected:
     void keyPressEvent(QKeyEvent *) override;
+    /* The map folds out when the window is tall enough to hold one. */
+    void resizeEvent(QResizeEvent *) override;
     /* Closing hides to the tray instead of quitting — the global shortcut is
      * registered by the running process. See trayicon.h. */
     void closeEvent(QCloseEvent *) override;
@@ -106,6 +115,17 @@ private:
     void refreshPttButton();
     void refreshPttHint();
     void watchConfig();
+
+    /* The map pane.
+     *
+     * Three states, not two: "auto" is the default and means the map appears
+     * when there is room for it and a feed to fill it, which is what makes it
+     * unobtrusive on a tiled half-screen window and present on a big one. The
+     * menu item switches to an explicit on or off, and that choice sticks. */
+    void applyMapVisibility();
+    void refreshMapMarkers();
+    QString mapMode() const;
+    void setMapMode(const QString &mode);
     void applyPttBindings();
     void showAbout();
 
@@ -118,6 +138,10 @@ private:
     ConnectionBar  *m_status    = nullptr;
     Sidebar        *m_sidebar   = nullptr;
     ActivityPanel  *m_activity  = nullptr;
+    ReflectorFeed  *m_feed      = nullptr;
+    MapView        *m_map       = nullptr;
+    QWidget        *m_mapPane   = nullptr;   /* map + its rule, shown as one */
+    QTimer         *m_mapTick   = nullptr;   /* 500 ms while the map is up   */
     QLabel         *m_banner    = nullptr;   /* the core's banner          */
     QLabel         *m_pttBanner = nullptr;   /* a lost push-to-talk control */
     QWidget        *m_reload    = nullptr;
@@ -133,6 +157,7 @@ private:
 
     QAction *m_actShowSidebar = nullptr;
     QAction *m_actShowLog     = nullptr;
+    QAction *m_actShowMap     = nullptr;
 
     QTimer *m_modelTick = nullptr;
     QTimer *m_meterTick = nullptr;

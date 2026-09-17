@@ -4,11 +4,13 @@
 #include "ui/activitypanel.h"
 #include "ui/theme.h"
 #include "ui/timefmt.h"
+#include "net/reflectorfeed.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QDateTime>
 #include <functional>
 
 namespace {
@@ -94,28 +96,67 @@ void ActivityPanel::buildUi()
 
     root->addSpacing(Theme::space(12));
 
-    /* ---- recent ---- */
-    m_recentHeader = labelWithRole(tr("Recent"), "section", this);
-    root->addWidget(m_recentHeader);
+    /* ---- reflector: the enhanced feed's 24 hours ----
+     * Built whether or not a feed exists, and shown only while one is up. It
+     * carries every talkgroup the reflector saw, including the ones this
+     * client does not monitor and everything that happened before it
+     * connected — neither of which the core can know. */
+    m_reflectorBox = new QWidget(this);
+    auto *reflectorRoot = new QVBoxLayout(m_reflectorBox);
+    reflectorRoot->setContentsMargins(0, 0, 0, 0);
+    reflectorRoot->setSpacing(Theme::space(4));
+
+    auto *reflectorHead = new QHBoxLayout;
+    reflectorHead->setSpacing(Theme::space(6));
+    reflectorHead->addWidget(labelWithRole(tr("Reflector"), "section", m_reflectorBox));
+    auto *reflectorBadge = labelWithRole(tr("24h"), "badge", m_reflectorBox);
+    reflectorBadge->setToolTip(tr("Straight from the reflector's portal: every talkgroup it "
+                                  "saw in the last 24 hours, not only the ones you monitor."));
+    reflectorHead->addWidget(reflectorBadge);
+    reflectorHead->addStretch(1);
+    reflectorRoot->addLayout(reflectorHead);
+
+    m_reflectorLayout = new QVBoxLayout;
+    m_reflectorLayout->setContentsMargins(0, 0, 0, 0);
+    m_reflectorLayout->setSpacing(Theme::space(2));
+    reflectorRoot->addLayout(m_reflectorLayout);
+
+    m_reflectorEmpty = labelWithRole(tr("Nothing heard in the last 24 hours"), "empty", m_reflectorBox);
+    m_reflectorEmpty->setAlignment(Qt::AlignCenter);
+    reflectorRoot->addWidget(m_reflectorEmpty);
+
+    m_reflectorBox->hide();
+    root->addWidget(m_reflectorBox);
+
+    /* ---- recent: the same question, answered locally ---- */
+    m_recentBox = new QWidget(this);
+    auto *recentRoot = new QVBoxLayout(m_recentBox);
+    recentRoot->setContentsMargins(0, 0, 0, 0);
+    recentRoot->setSpacing(Theme::space(4));
+
+    m_recentHeader = labelWithRole(tr("Recent"), "section", m_recentBox);
+    recentRoot->addWidget(m_recentHeader);
 
     /* Locking and muting are not display filters: both take the talkgroup out
      * of the subscription sent to the reflector, so nothing from it arrives at
      * all — no audio, and no activity to list here. That is worth saying,
      * because an empty Recent otherwise looks like a quiet net. */
-    m_scopeHint = labelWithRole(QString(), "hint", this);
+    m_scopeHint = labelWithRole(QString(), "hint", m_recentBox);
     Theme::setTone(m_scopeHint, "warn");
     m_scopeHint->setWordWrap(true);
     m_scopeHint->hide();
-    root->addWidget(m_scopeHint);
+    recentRoot->addWidget(m_scopeHint);
 
     m_recentLayout = new QVBoxLayout;
     m_recentLayout->setContentsMargins(0, 0, 0, 0);
     m_recentLayout->setSpacing(Theme::space(2));
-    root->addLayout(m_recentLayout);
+    recentRoot->addLayout(m_recentLayout);
 
-    m_recentEmpty = labelWithRole(tr("Nothing heard yet"), "empty", this);
+    m_recentEmpty = labelWithRole(tr("Nothing heard yet"), "empty", m_recentBox);
     m_recentEmpty->setAlignment(Qt::AlignCenter);
-    root->addWidget(m_recentEmpty);
+    recentRoot->addWidget(m_recentEmpty);
+
+    root->addWidget(m_recentBox);
 
     root->addStretch(1);
 }
@@ -225,12 +266,80 @@ void ActivityPanel::rebuildRecent(quint64 nowMs)
         r.time->setText(TimeFmt::ago(r.stamp, nowMs));
 }
 
+void ActivityPanel::setFeed(ReflectorFeed *feed)
+{
+    m_feed = feed;
+}
+
+void ActivityPanel::rebuildReflector(quint64 nowMs)
+{
+    /* The feed keeps 60 sessions; this panel is not a scroll area, so it shows
+     * the same 16 the core's own recent list holds. Beyond that the window
+     * would grow a history nobody asked to read. */
+    constexpr int kMaxRows = 16;
+
+    const QVector<ReflectorFeed::Session> &all = m_feed->sessions();
+    const int n = qMin(all.size(), kMaxRows);
+
+    QString sig;
+    for (int i = 0; i < n; ++i)
+        sig += QStringLiteral("%1@%2@%3@%4,").arg(all[i].callsign)
+                                             .arg(all[i].tg)
+                                             .arg(all[i].lastActivityMs())
+                                             .arg(all[i].active ? 1 : 0);
+
+    if (sig != m_reflectorSig) {
+        m_reflectorSig = sig;
+        for (const Row &r : std::as_const(m_reflectorRows))
+            r.widget->deleteLater();
+        m_reflectorRows.clear();
+
+        for (int i = 0; i < n; ++i) {
+            const ReflectorFeed::Session &s = all[i];
+            Row r = makeRow(s.callsign, quint32(qMax(0, s.tg)), s.active,
+                            quint64(s.active ? s.startMs : s.endMs));
+            if (!s.location.isEmpty())
+                r.widget->setToolTip(s.tg > 0
+                    ? tr("%1 — %2. Click to switch to TG %3.").arg(s.callsign, s.location).arg(s.tg)
+                    : tr("%1 — %2").arg(s.callsign, s.location));
+            m_reflectorLayout->addWidget(r.widget);
+            m_reflectorRows.append(r);
+        }
+        m_reflectorEmpty->setVisible(m_reflectorRows.isEmpty());
+    }
+
+    /* The feed's timestamps are wall-clock epoch milliseconds, while the core's
+     * are a monotonic clock — so these rows are aged against the wall clock,
+     * not against the tick's `nowMs`. Mixing the two is how a session that
+     * ended a minute ago ends up claiming it happened in 1970. */
+    Q_UNUSED(nowMs);
+    const quint64 epochNow = quint64(QDateTime::currentMSecsSinceEpoch());
+    for (const Row &r : std::as_const(m_reflectorRows))
+        r.time->setText(r.live ? TimeFmt::elapsed(r.stamp, epochNow)
+                               : TimeFmt::ago(r.stamp, epochNow));
+}
+
 void ActivityPanel::tickModel(quint64 nowMs)
 {
+    /* One history section at a time. The feed's is better in every way — it
+     * sees talkgroups this client never subscribed to — so when it is up, the
+     * local one goes away rather than sitting underneath saying less. */
+    const bool enhanced = m_feed && m_feed->isAvailable();
+    m_reflectorBox->setVisible(enhanced);
+    m_recentBox->setVisible(!enhanced);
+
+    if (enhanced)
+        rebuildReflector(nowMs);
+
     if (!m_app) return;
     rebuildLocal(nowMs);
-    rebuildRecent(nowMs);
-    refreshScopeHint();
+
+    if (!enhanced) {
+        rebuildRecent(nowMs);
+        /* Locking and muting only narrow what this CLIENT receives, which is
+         * why the warning belongs to the local list alone. */
+        refreshScopeHint();
+    }
 }
 
 void ActivityPanel::refreshScopeHint()

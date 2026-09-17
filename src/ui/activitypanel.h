@@ -9,13 +9,16 @@
  *            as reported by the reflector over TCP. Live, counts up.
  *   RECENT   tg_manager::recent[] — the last 16 finished overs.
  *
- * The macOS app has a third, REFLECTOR: 24 hours of sessions from the enhanced
- * reflector's WebSocket feed, which is the only source of other nodes'
- * coordinates and of history from before you connected. That feed is beyond
- * v1, so the section does not exist yet. When it lands, this is where it goes,
- * and the gating rule to copy is: show Reflector when the feed is up, and fall
- * back to Recent when it is not — the macOS app shows NEITHER when enhanced
- * mode is on but the feed is down, which leaves an empty panel for no reason.
+ * There is a third, REFLECTOR: 24 hours of sessions from the enhanced
+ * reflector's WebSocket feed (see net/reflectorfeed.h), which is the only
+ * source of history from before you connected and of traffic on talkgroups you
+ * do not monitor. It replaces RECENT whenever the feed is up, because the two
+ * say the same thing and the feed says it better.
+ *
+ * The gating rule is deliberately not the macOS one: that app shows NEITHER
+ * section when enhanced mode is on but the feed is down, which leaves an empty
+ * panel for no reason. Here, no feed means the local Recent list, exactly as
+ * before.
  *
  * Rows are rebuilt only when the content actually changes, keyed on a cheap
  * signature. The relative-time labels are refreshed in place every tick
@@ -32,6 +35,7 @@
 
 class QLabel;
 class QVBoxLayout;
+class ReflectorFeed;
 
 class ActivityPanel : public QWidget {
     Q_OBJECT
@@ -40,6 +44,9 @@ public:
     explicit ActivityPanel(svx_app *app, QWidget *parent = nullptr);
 
     void tickModel(quint64 nowMs);
+
+    /* The enhanced reflector's feed, or null. Not owned. */
+    void setFeed(ReflectorFeed *feed);
 
 signals:
     /* A row was clicked — switch to that talkgroup. */
@@ -56,6 +63,7 @@ private:
     void buildUi();
     void rebuildLocal(quint64 nowMs);
     void rebuildRecent(quint64 nowMs);
+    void rebuildReflector(quint64 nowMs);
     void refreshScopeHint();
     Row  makeRow(const QString &callsign, quint32 tg, bool live, quint64 stamp);
 
@@ -66,6 +74,11 @@ private:
     QVBoxLayout *m_localLayout  = nullptr;
     QLabel      *m_localEmpty   = nullptr;
 
+    /* Each history section is a container, so switching between them is one
+     * setVisible() rather than a hunt for loose widgets. */
+    QWidget     *m_recentBox    = nullptr;
+    QWidget     *m_reflectorBox = nullptr;
+
     QLabel      *m_recentHeader = nullptr;
     /* Why a talkgroup is missing from the list: locking and muting both
      * unsubscribe, so nothing from those talkgroups is received at all. */
@@ -73,11 +86,18 @@ private:
     QVBoxLayout *m_recentLayout = nullptr;
     QLabel      *m_recentEmpty  = nullptr;
 
+    QVBoxLayout *m_reflectorLayout = nullptr;
+    QLabel      *m_reflectorEmpty  = nullptr;
+
     QVector<Row> m_localRows;
     QVector<Row> m_recentRows;
+    QVector<Row> m_reflectorRows;
 
     QString m_localSig;
     QString m_recentSig;
+    QString m_reflectorSig;
+
+    ReflectorFeed *m_feed = nullptr;
 };
 
 #endif

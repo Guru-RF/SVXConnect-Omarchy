@@ -5,6 +5,8 @@
 #include "ui/statusbar.h"
 #include "ui/sidebar.h"
 #include "ui/activitypanel.h"
+#include "ui/mapview.h"
+#include "net/reflectorfeed.h"
 #include "ui/theme.h"
 #include "ui/configfile.h"
 #include "ui/preferencesdialog.h"
@@ -24,6 +26,7 @@
 #include <QPlainTextEdit>
 #include <QTimer>
 #include <QMenu>
+#include <algorithm>
 #include <QAction>
 #include <QKeyEvent>
 #include <QScrollBar>
@@ -126,6 +129,27 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
         activateWindow();
     });
 
+    /* The enhanced reflector's feed. It probes on its own and reports back;
+     * everything downstream keys off isAvailable(). */
+    m_feed = new ReflectorFeed(this);
+    m_feed->setEnabled(ReflectorFeed::enabledSetting());
+    if (m_app)
+        m_feed->setReflector(QString::fromUtf8(app_config(m_app)->reflector));
+    m_activity->setFeed(m_feed);
+
+    connect(m_feed, &ReflectorFeed::availabilityChanged, this, [this](bool up) {
+        applyMapVisibility();
+        if (up)
+            refreshMapMarkers();
+    });
+
+    /* Markers are rebuilt on a slow timer rather than on the feed's own signal:
+     * a busy portal sends dozens of messages a second and the map does not
+     * need to know about any single one of them. */
+    m_mapTick = new QTimer(this);
+    m_mapTick->setInterval(500);
+    connect(m_mapTick, &QTimer::timeout, this, &MainWindow::refreshMapMarkers);
+
     QSettings s;
     if (s.contains(QStringLiteral("window/geometry")))
         restoreGeometry(s.value(QStringLiteral("window/geometry")).toByteArray());
@@ -143,6 +167,7 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     m_meterTick->start();
 
     refreshPttHint();
+    applyMapVisibility();
     tickModel();
 }
 
@@ -295,6 +320,23 @@ void MainWindow::buildUi()
 
     root->addWidget(pttWrap);
 
+    /* ---- the map ----
+     * Below the transmit controls, because it is the one part of the window
+     * you look at between overs rather than during one. It only ever shows
+     * positions the enhanced reflector published, so with a plain reflector
+     * there is nothing to draw and the pane stays folded. */
+    m_mapPane = new QWidget(central);
+    auto *mapLay = new QVBoxLayout(m_mapPane);
+    mapLay->setContentsMargins(0, 0, 0, 0);
+    mapLay->setSpacing(0);
+    mapLay->addWidget(rule(m_mapPane));
+
+    m_map = new MapView(m_mapPane);
+    mapLay->addWidget(m_map, 1);
+
+    m_mapPane->hide();
+    root->addWidget(m_mapPane);
+
     setCentralWidget(central);
     refreshPttButton();
 }
@@ -360,6 +402,17 @@ void MainWindow::buildActions()
     });
     connect(m_logButton, &QToolButton::toggled, m_actShowLog, &QAction::setChecked);
 
+    m_actShowMap = action(tr("Show map"), QStringLiteral("Ctrl+M"));
+    m_actShowMap->setCheckable(true);
+    m_actShowMap->setToolTip(tr("Where the reflector's nodes are. Needs an enhanced "
+                                "reflector, which is the only thing that knows."));
+    connect(m_actShowMap, &QAction::toggled, this, [this](bool on) {
+        /* Touching the item is a decision: it leaves automatic mode and stays
+         * where it was put. */
+        setMapMode(on ? QStringLiteral("on") : QStringLiteral("off"));
+        applyMapVisibility();
+    });
+
     QAction *docs = action(tr("Documentation"), QString());
     connect(docs, &QAction::triggered, this, []() {
         QDesktopServices::openUrl(QUrl(QStringLiteral("https://svxconnect.app")));
@@ -385,6 +438,7 @@ void MainWindow::buildActions()
     menu->addSeparator();
     menu->addAction(m_actShowSidebar);
     menu->addAction(m_actShowLog);
+    menu->addAction(m_actShowMap);
     menu->addSeparator();
     menu->addAction(docs);
     menu->addAction(about);
@@ -491,6 +545,118 @@ void MainWindow::tickModel()
         refreshLog();
 }
 
+QString MainWindow::mapMode() const
+{
+    return QSettings().value(QStringLiteral("map/mode"), QStringLiteral("auto")).toString();
+}
+
+void MainWindow::setMapMode(const QString &mode)
+{
+    QSettings().setValue(QStringLiteral("map/mode"), mode);
+}
+
+void MainWindow::applyMapVisibility()
+{
+    const QString mode = mapMode();
+
+    /* Nothing to draw without a feed: a plain reflector publishes no
+     * positions, so an empty map would only take up room. Asking for it
+     * explicitly still shows the pane, which is how you see WHY it is empty. */
+    const bool haveData = m_feed && m_feed->isAvailable();
+
+    bool show = false;
+    if (mode == QLatin1String("on")) {
+        show = true;
+    } else if (mode == QLatin1String("off")) {
+        show = false;
+    } else {
+        /* Automatic: only when the window is tall enough that the map is not
+         * competing with the talkgroups and the activity list for the same
+         * pixels. The two thresholds differ so a window dragged around the
+         * boundary does not flap. */
+        const int unfold = Theme::space(700);
+        const int fold   = Theme::space(620);
+        const bool room  = m_mapPane->isVisible() ? height() >= fold : height() >= unfold;
+        show = haveData && room;
+    }
+
+    if (m_actShowMap) {
+        const QSignalBlocker b(m_actShowMap);
+        m_actShowMap->setChecked(show);
+    }
+
+    if (show == m_mapPane->isVisible())
+        return;
+
+    m_mapPane->setVisible(show);
+    if (show) {
+        refreshMapMarkers();
+        m_mapTick->start();
+    } else {
+        m_mapTick->stop();
+    }
+}
+
+void MainWindow::refreshMapMarkers()
+{
+    if (!m_map || !m_mapPane->isVisible())
+        return;
+
+    QVector<MapView::Marker> markers;
+
+    const QString own = m_app ? QString::fromUtf8(app_config(m_app)->callsign).toUpper() : QString();
+
+    if (m_feed) {
+        const QHash<QString, ReflectorFeed::Node> &nodes = m_feed->nodes();
+        markers.reserve(nodes.size() + 1);
+        for (auto it = nodes.cbegin(); it != nodes.cend(); ++it) {
+            const ReflectorFeed::Node &n = it.value();
+            if (!n.hasPos)
+                continue;
+            MapView::Marker m;
+            m.callsign  = n.callsign;
+            m.detail    = n.tg > 0 ? tr("TG %1").arg(n.tg) : n.location;
+            m.latitude  = n.latitude;
+            m.longitude = n.longitude;
+            m.talking   = n.isTalker;
+            m.self      = !own.isEmpty() && n.callsign.startsWith(own);
+            markers.append(m);
+        }
+    }
+
+    /* Your own station, when the reflector did not list it — it is the one
+     * marker whose position this client already knows. */
+    if (m_app && !own.isEmpty()) {
+        const svx_config *cfg = app_config(m_app);
+        const bool listed = std::any_of(markers.cbegin(), markers.cend(),
+                                        [](const MapView::Marker &m) { return m.self; });
+        if (!listed && (cfg->latitude != 0.0 || cfg->longitude != 0.0)) {
+            MapView::Marker me;
+            me.callsign  = own;
+            me.detail    = tr("you");
+            me.latitude  = cfg->latitude;
+            me.longitude = cfg->longitude;
+            me.self      = true;
+            markers.append(me);
+        }
+    }
+
+    /* A stable order, so the fit and the drawing do not shuffle between
+     * ticks — QHash iteration order is not an order. */
+    std::sort(markers.begin(), markers.end(),
+              [](const MapView::Marker &a, const MapView::Marker &b) {
+                  return a.callsign < b.callsign;
+              });
+
+    m_map->setMarkers(markers);
+}
+
+void MainWindow::resizeEvent(QResizeEvent *e)
+{
+    QMainWindow::resizeEvent(e);
+    applyMapVisibility();
+}
+
 void MainWindow::tickMeters()
 {
     m_sidebar->tickMeters();
@@ -582,6 +748,12 @@ void MainWindow::setConfigPath(const QString &path)
 {
     m_configPath = path;
     watchConfig();
+}
+
+void MainWindow::setReflectorHost(const QString &host)
+{
+    if (m_feed)
+        m_feed->setReflector(host);
 }
 
 void MainWindow::watchConfig()
@@ -704,6 +876,13 @@ void MainWindow::onPreferences()
         disconnect(trigConn);
 
     m_notifier->setEnabled(Notifier::enabledSetting());
+    /* The feed is a desktop setting, not a config key, so it applies at once:
+     * switching it off must take the reflector's history off the screen
+     * without a restart, which is the whole point of having the switch. */
+    if (m_feed) {
+        m_feed->setEnabled(ReflectorFeed::enabledSetting());
+        applyMapVisibility();
+    }
     refreshPttHint();
 }
 

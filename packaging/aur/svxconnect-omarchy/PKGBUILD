@@ -15,7 +15,7 @@ url="https://github.com/Guru-RF/SVXConnect-Omarchy"
 license=(MIT)
 # svxconnect writes the configuration and enrols; the app cannot do either.
 # libpulse is dlopen()ed at runtime by miniaudio, so it is named by hand.
-depends=("svxconnect>=$_cliver" qt6-base qt6-svg qt6-wayland openssl opus libpulse
+depends=("svxconnect>=$_cliver" qt6-base qt6-svg qt6-websockets qt6-wayland openssl opus libpulse
          hicolor-icon-theme xdg-desktop-portal)
 makedepends=(cmake)
 optdepends=('xdg-desktop-portal-hyprland: global push-to-talk on Hyprland'
