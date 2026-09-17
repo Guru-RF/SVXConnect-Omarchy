@@ -4,7 +4,7 @@
 # the Omarchy theme and takes push-to-talk through Hyprland.
 
 pkgname=svxconnect-omarchy
-pkgver=0.1.6
+pkgver=0.1.7
 pkgrel=1
 # The SVXConnect-CLI release the app's core is built from — the commit
 # third_party/svxconnect-cli is pinned to in this release.
@@ -24,7 +24,7 @@ optdepends=('xdg-desktop-portal-hyprland: global push-to-talk on Hyprland'
 # fetched as its own tarball and handed to CMake with CLI_DIR.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
         "svxconnect-cli-$_cliver.tar.gz::https://github.com/Guru-RF/SVXConnect-CLI/archive/refs/tags/v$_cliver.tar.gz")
-sha256sums=('7a40951c12e3d1c10b73ae9e6a0633530aebc7c0b8c03f7c135dafc72f605cfc'
+sha256sums=('b390be2603b2a5ab9dd6485bfb30c38a4d1c5edce817369d6d9b121497213842'
             '6c521e88ea95d8fdc1383b0cc14dfaa55598b74345fb0e604666ddcee3177cf4')
 
 build() {

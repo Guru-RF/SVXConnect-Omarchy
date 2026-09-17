@@ -1,6 +1,6 @@
 pkgbase = svxconnect-omarchy
 	pkgdesc = SvxLink reflector client for Omarchy, with Hyprland push-to-talk
-	pkgver = 0.1.6
+	pkgver = 0.1.7
 	pkgrel = 1
 	url = https://github.com/Guru-RF/SVXConnect-Omarchy
 	arch = x86_64
@@ -19,9 +19,9 @@ pkgbase = svxconnect-omarchy
 	depends = xdg-desktop-portal
 	optdepends = xdg-desktop-portal-hyprland: global push-to-talk on Hyprland
 	optdepends = alsa-lib: audio without PulseAudio or PipeWire
-	source = svxconnect-omarchy-0.1.6.tar.gz::https://github.com/Guru-RF/SVXConnect-Omarchy/archive/refs/tags/v0.1.6.tar.gz
+	source = svxconnect-omarchy-0.1.7.tar.gz::https://github.com/Guru-RF/SVXConnect-Omarchy/archive/refs/tags/v0.1.7.tar.gz
 	source = svxconnect-cli-0.1.2.tar.gz::https://github.com/Guru-RF/SVXConnect-CLI/archive/refs/tags/v0.1.2.tar.gz
-	sha256sums = 7a40951c12e3d1c10b73ae9e6a0633530aebc7c0b8c03f7c135dafc72f605cfc
+	sha256sums = b390be2603b2a5ab9dd6485bfb30c38a4d1c5edce817369d6d9b121497213842
 	sha256sums = 6c521e88ea95d8fdc1383b0cc14dfaa55598b74345fb0e604666ddcee3177cf4
 
 pkgname = svxconnect-omarchy
