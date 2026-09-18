@@ -142,6 +142,11 @@ private:
     void applyMapVisibility();
     void refreshMapMarkers();
 
+    /* Point the feed and the portal at a reflector host. One place, because
+     * they are built at different moments and doing it inline is how 0.1.8
+     * managed to call a method on a portal that did not exist yet. */
+    void applyReflectorHost(const QString &host);
+
     /* A station's card was opened: answer with everything this client can find
      * out about the callsign that the reflector itself does not publish. */
     void onStationOpened(const QString &callsign);

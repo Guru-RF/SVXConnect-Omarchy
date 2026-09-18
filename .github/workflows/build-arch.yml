@@ -44,3 +44,9 @@ jobs:
 
       - name: Licence guard
         run: tools/licence_guard.sh build/svxconnect-omarchy
+
+      # The unit tests are pure functions and the layout-only mode skips the
+      # core, so neither touches the path a real start takes. 0.1.8 crashed on
+      # every launch and passed both.
+      - name: Start-up smoke test
+        run: tools/smoketest.sh build/svxconnect-omarchy

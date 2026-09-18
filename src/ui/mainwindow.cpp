@@ -146,6 +146,15 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     buildUi();
     buildActions();
 
+    /* Everything that talks to the reflector is built by now, so this is where
+     * they are pointed at it — in ONE place. Doing it inline as each object was
+     * created is what shipped 0.1.8 dereferencing a null portal on every start
+     * that had a core, which is every start that is not a screenshot. */
+    if (m_app) {
+        m_cfg = app_config(m_app);
+        applyReflectorHost(QString::fromUtf8(m_cfg->reflector));
+    }
+
     /* Global push-to-talk. Constructed even without a core so the settings
      * page can probe backends in SVX_WINDOW_ONLY mode; the manager simply
      * never calls app_ptt() when m_app is null. */
@@ -196,11 +205,6 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
      * everything downstream keys off isAvailable(). */
     m_feed = new ReflectorFeed(this);
     m_feed->setEnabled(ReflectorFeed::enabledSetting());
-    if (m_app) {
-        m_cfg = app_config(m_app);
-        m_feed->setReflector(QString::fromUtf8(m_cfg->reflector));
-        m_portal->setReflector(QString::fromUtf8(m_cfg->reflector));
-    }
     m_activity->setFeed(m_feed);
 
     /* The portal's paperwork — talkgroup names and the repeater descriptions
@@ -968,15 +972,20 @@ bool MainWindow::showStationOnMap(const QString &callsign)
     return m_map->openStation(callsign);
 }
 
+void MainWindow::applyReflectorHost(const QString &host)
+{
+    if (m_feed)
+        m_feed->setReflector(host);
+    if (m_portal)
+        m_portal->setReflector(host);
+}
+
 void MainWindow::setOfflineConfig(const svx_config *cfg)
 {
     if (!cfg)
         return;
     m_cfg = cfg;
-    if (m_feed)
-        m_feed->setReflector(QString::fromUtf8(cfg->reflector));
-    if (m_portal)
-        m_portal->setReflector(QString::fromUtf8(cfg->reflector));
+    applyReflectorHost(QString::fromUtf8(cfg->reflector));
 }
 
 void MainWindow::watchConfig()

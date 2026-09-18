@@ -42,6 +42,10 @@ check() {
     ctest --test-dir build --output-on-failure
     # Fails if a GPL-only Qt module was linked, which would make the binary GPLv3.
     sh "SVXConnect-Omarchy-$pkgver/tools/licence_guard.sh" build/svxconnect-omarchy
+    # Fails if the application cannot start. Neither the unit tests nor the
+    # layout-only mode go anywhere near that path; 0.1.8 shipped a crash that
+    # both of them passed.
+    sh "SVXConnect-Omarchy-$pkgver/tools/smoketest.sh" build/svxconnect-omarchy
 }
 
 package() {
