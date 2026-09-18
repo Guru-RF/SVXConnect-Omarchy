@@ -69,7 +69,12 @@ private:
     void rebuildRecent(quint64 nowMs);
     void rebuildReflector(quint64 nowMs);
     void refreshScopeHint();
-    Row  makeRow(const QString &callsign, quint32 tg, bool live, quint64 stamp);
+    Row  makeRow(const QString &callsign, quint32 tg, bool live, quint64 stamp,
+                 const QString &location = QString());
+
+    /* Where the feed says a station is, shortened to the town — or nothing,
+     * when there is no feed or it has no idea. */
+    QString townOf(const QString &callsign) const;
 
     svx_app *m_app = nullptr;
 

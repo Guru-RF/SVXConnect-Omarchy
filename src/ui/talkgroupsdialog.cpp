@@ -12,6 +12,10 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QVBoxLayout>
+#include <QSet>
+#include <algorithm>
+
+#include "core/svxcore.h"   /* tglist_parse, SVX_MAX_TG, SVX_MAX_PRIO */
 
 ReflectorTalkgroupsDialog::ReflectorTalkgroupsDialog(const QList<Entry> &entries, QWidget *parent)
     : QDialog(parent)
@@ -24,7 +28,7 @@ ReflectorTalkgroupsDialog::ReflectorTalkgroupsDialog(const QList<Entry> &entries
     root->setSpacing(Theme::space(10));
 
     auto *intro = new QLabel(
-        tr("Everything this reflector names or has a node listening on. "
+        tr("The talkgroups this reflector names, busiest first. "
            "<b>Monitor</b> is everything you want to hear; <b>Switch</b> is the short "
            "list the sidebar cycles through, so keep it short."), this);
     intro->setWordWrap(true);
@@ -101,6 +105,12 @@ ReflectorTalkgroupsDialog::ReflectorTalkgroupsDialog(const QList<Entry> &entries
     scroll->setWidget(host);
     root->addWidget(scroll, 1);
 
+    m_keptNote = new QLabel(this);
+    m_keptNote->setWordWrap(true);
+    Theme::setRole(m_keptNote, "hint");
+    m_keptNote->hide();
+    root->addWidget(m_keptNote);
+
     auto *tools = new QHBoxLayout;
     tools->setSpacing(Theme::space(8));
 
@@ -156,6 +166,146 @@ ReflectorTalkgroupsDialog::ReflectorTalkgroupsDialog(const QList<Entry> &entries
     connect(box, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(box, &QDialogButtonBox::rejected, this, &QDialog::reject);
     root->addWidget(box);
+}
+
+namespace {
+
+/* One configuration field, parsed by the core's own parser so this agrees with
+ * what the core will make of the result. */
+struct Parsed {
+    QList<quint32>      order;
+    QHash<quint32, int> priority;
+};
+
+Parsed parseField(const QString &text)
+{
+    Parsed out;
+    svx_tg_entry v[SVX_MAX_TG];
+    const int n = tglist_parse(qPrintable(text), v, SVX_MAX_TG);
+    for (int i = 0; i < qMax(0, n); ++i) {
+        if (!out.order.contains(v[i].id))
+            out.order.append(v[i].id);
+        out.priority.insert(v[i].id, v[i].priority);
+    }
+    return out;
+}
+
+} // namespace
+
+QList<ReflectorTalkgroupsDialog::Entry>
+ReflectorTalkgroupsDialog::entriesFor(const QHash<quint32, QString> &names,
+                                      const QHash<quint32, int> &nodeCount,
+                                      const QString &monitoredText,
+                                      const QString &switchableText,
+                                      QList<quint32> *keptOut)
+{
+    /* The list is what the talkgroup info JSON names, and nothing else.
+     *
+     * It used to be the union with whatever the feed saw nodes listening to,
+     * which is how 60, 10, 2300 and 145925 turned up in it: talkgroups two
+     * stations agreed on, or somebody's typo, offered as if the reflector
+     * vouched for them. The JSON is the reflector's — or the operator's — own
+     * statement of what its talkgroups are; the feed only says how busy each
+     * one is, which stays as the Nodes column. */
+    QSet<quint32> ids;
+    for (auto it = names.cbegin(); it != names.cend(); ++it)
+        ids.insert(it.key());
+    if (ids.isEmpty())
+        for (auto it = nodeCount.cbegin(); it != nodeCount.cend(); ++it)
+            ids.insert(it.key());          /* no JSON: nothing to filter by */
+
+    const Parsed mon = parseField(monitoredText);
+    const Parsed sw  = parseField(switchableText);
+
+    if (keptOut) {
+        keptOut->clear();
+        for (quint32 id : mon.order + sw.order)
+            if (!ids.contains(id) && !keptOut->contains(id))
+                keptOut->append(id);
+        std::sort(keptOut->begin(), keptOut->end());
+    }
+
+    QList<Entry> entries;
+    entries.reserve(ids.size());
+    for (quint32 id : std::as_const(ids)) {
+        Entry e;
+        e.id         = id;
+        e.name       = names.value(id);
+        e.nodes      = nodeCount.value(id, 0);
+        e.monitored  = mon.priority.contains(id);
+        e.switchable = sw.priority.contains(id);
+        entries.append(e);
+    }
+
+    /* Busiest first: on a reflector with eighteen named talkgroups, the three
+     * anyone uses should not be somewhere in the middle of an ordered list. */
+    std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+        if (a.nodes != b.nodes) return a.nodes > b.nodes;
+        return a.id < b.id;
+    });
+    return entries;
+}
+
+ReflectorTalkgroupsDialog::Fields
+ReflectorTalkgroupsDialog::compose(const QList<Entry> &chosen,
+                                   const QString &monitoredText,
+                                   const QString &switchableText)
+{
+    const Parsed mon = parseField(monitoredText);
+    const Parsed sw  = parseField(switchableText);
+
+    QSet<quint32> listed;
+    QList<quint32> monitored, switchable;
+    for (const Entry &e : chosen) {
+        listed.insert(e.id);
+        if (e.monitored)  monitored.append(e.id);
+        if (e.switchable) switchable.append(e.id);
+    }
+
+    /* What was configured but never on the list comes through untouched. */
+    for (quint32 id : mon.order)
+        if (!listed.contains(id) && !monitored.contains(id)) monitored.append(id);
+    for (quint32 id : sw.order)
+        if (!listed.contains(id) && !switchable.contains(id)) switchable.append(id);
+
+    /* Monitored: by number, each with the priority it already had. */
+    std::sort(monitored.begin(), monitored.end());
+    if (monitored.size() > SVX_MAX_TG)
+        monitored.resize(SVX_MAX_TG);
+
+    QStringList monParts;
+    for (quint32 id : std::as_const(monitored)) {
+        const int p = qBound(0, mon.priority.value(id, 0), SVX_MAX_PRIO);
+        monParts << QString::number(id) + QString(p, QLatin1Char('+'));
+    }
+
+    /* Switchable: the cycle keeps the order it had, and anything newly ticked
+     * joins the end by number. Re-sorting it would silently rearrange the
+     * sidebar — and move the first entry, which is the default talkgroup. */
+    QList<quint32> ordered;
+    for (quint32 id : sw.order)
+        if (switchable.contains(id) && !ordered.contains(id))
+            ordered.append(id);
+    std::sort(switchable.begin(), switchable.end());
+    for (quint32 id : std::as_const(switchable))
+        if (!ordered.contains(id))
+            ordered.append(id);
+    if (ordered.size() > SVX_MAX_TG)
+        ordered.resize(SVX_MAX_TG);
+
+    QStringList swParts;
+    for (quint32 id : std::as_const(ordered))
+        swParts << QString::number(id);
+
+    /* ", " is what the core's own tglist_format() writes, so a list that did
+     * not really change compares equal and the file is left alone. */
+    return Fields{ monParts.join(QStringLiteral(", ")), swParts.join(QStringLiteral(", ")) };
+}
+
+void ReflectorTalkgroupsDialog::setKeptNote(const QString &text)
+{
+    m_keptNote->setText(text);
+    m_keptNote->setVisible(!text.isEmpty());
 }
 
 QList<ReflectorTalkgroupsDialog::Entry> ReflectorTalkgroupsDialog::chosen() const

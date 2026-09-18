@@ -217,6 +217,15 @@ target_compile_definitions(test_mapcamera PRIVATE
 target_link_libraries(test_mapcamera PRIVATE svxcore Qt6::Widgets Qt6::Network Qt6::Svg)
 add_test(NAME mapcamera COMMAND test_mapcamera)
 
+add_executable(test_talkgrouppicker
+    tests/test_talkgrouppicker.cpp
+    src/ui/talkgroupsdialog.cpp
+    src/ui/omarchytheme.cpp)
+target_include_directories(test_talkgrouppicker PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_talkgrouppicker PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_talkgrouppicker PRIVATE svxcore Qt6::Widgets Qt6::Svg)
+add_test(NAME talkgrouppicker COMMAND test_talkgrouppicker)
+
 add_executable(test_hyprlandbinding
     tests/test_hyprlandbinding.cpp
     src/ptt/hyprlandbinding.cpp)

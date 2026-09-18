@@ -26,10 +26,12 @@
 #define SVXCONNECT_OMARCHY_TALKGROUPSDIALOG_H
 
 #include <QDialog>
+#include <QHash>
 #include <QList>
 #include <QString>
 
 class QCheckBox;
+class QLabel;
 
 class ReflectorTalkgroupsDialog : public QDialog {
     Q_OBJECT
@@ -49,6 +51,37 @@ public:
 
     QList<Entry> chosen() const;
 
+    /* ---- pure, and unit-tested ----
+     *
+     * This dialog edits somebody's configuration, so the two steps that decide
+     * what ends up in it are functions of their inputs and nothing else. */
+
+    /* What to list: the talkgroups the JSON names — and only those; the feed's
+     * node counts annotate them but do not add to them — ticked according to
+     * the two configuration fields as they stand. With no names at all, the
+     * feed's talkgroups are the fallback. Busiest first. `keptOut`, if given,
+     * receives the configured talkgroups that are NOT listed. */
+    static QList<Entry> entriesFor(const QHash<quint32, QString> &names,
+                                   const QHash<quint32, int> &nodeCount,
+                                   const QString &monitoredText,
+                                   const QString &switchableText,
+                                   QList<quint32> *keptOut = nullptr);
+
+    /* The two fields after the operator's choice. Priorities already set
+     * survive; the switch order already set survives, new entries joining the
+     * end; and configured talkgroups that were never listed are carried
+     * through untouched — filtering a list must not be a way to delete from a
+     * configuration. */
+    struct Fields { QString monitored; QString switchable; };
+    static Fields compose(const QList<Entry> &chosen,
+                          const QString &monitoredText,
+                          const QString &switchableText);
+
+    /* A line under the list, for what the caller is carrying through without
+     * showing — talkgroups in the configuration that the reflector does not
+     * name. Hidden when empty. */
+    void setKeptNote(const QString &text);
+
 private:
     struct Row {
         Entry      entry;
@@ -57,6 +90,7 @@ private:
     };
 
     QList<Row> m_rows;
+    QLabel    *m_keptNote = nullptr;
 };
 
 #endif

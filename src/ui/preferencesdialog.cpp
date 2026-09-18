@@ -486,9 +486,8 @@ void PreferencesDialog::refreshReflectorButton()
 
 void PreferencesDialog::onLoadFromReflector()
 {
-    /* Two sources, and both are needed. The portal names talkgroups but lists
-     * only the official ones; the feed knows what nodes are actually listening
-     * to, including the ones two people agreed on last week. */
+    /* How busy each talkgroup is, from the feed. It annotates the list; it
+     * does not add to it — see ReflectorTalkgroupsDialog::entriesFor(). */
     QHash<quint32, int> nodeCount;
     if (m_feed) {
         const QHash<QString, ReflectorFeed::Node> &nodes = m_feed->nodes();
@@ -501,104 +500,34 @@ void PreferencesDialog::onLoadFromReflector()
     const QHash<quint32, QString> names = m_portal ? m_portal->talkgroups()
                                                    : QHash<quint32, QString>();
 
-    /* What is configured now, priorities and cycle order included. */
-    svx_tg_entry mon[SVX_MAX_TG];
-    svx_tg_entry sw[SVX_MAX_TG];
-    const int nMon = tglist_parse(qPrintable(m_monitored->text()),  mon, SVX_MAX_TG);
-    const int nSw  = tglist_parse(qPrintable(m_switchable->text()), sw,  SVX_MAX_TG);
+    QList<quint32> kept;
+    const QList<ReflectorTalkgroupsDialog::Entry> entries =
+        ReflectorTalkgroupsDialog::entriesFor(names, nodeCount, m_monitored->text(),
+                                              m_switchable->text(), &kept);
 
-    QHash<quint32, int> priority;
-    QSet<quint32> isMon, isSw;
-    QList<quint32> swOrder;
-    for (int i = 0; i < qMax(0, nMon); ++i) {
-        priority.insert(mon[i].id, mon[i].priority);
-        isMon.insert(mon[i].id);
-    }
-    for (int i = 0; i < qMax(0, nSw); ++i) {
-        isSw.insert(sw[i].id);
-        swOrder.append(sw[i].id);
-    }
-
-    /* Never silently drop what the operator already has, even if this
-     * reflector has never heard of it. */
-    QSet<quint32> ids;
-    for (auto it = names.cbegin(); it != names.cend(); ++it) ids.insert(it.key());
-    for (auto it = nodeCount.cbegin(); it != nodeCount.cend(); ++it) ids.insert(it.key());
-    ids.unite(isMon);
-    ids.unite(isSw);
-
-    if (ids.isEmpty()) {
+    if (entries.isEmpty()) {
         QMessageBox::information(this, tr("Nothing to load"),
             tr("The reflector published no talkgroups. Either it is not an enhanced "
-               "reflector, or its portal is not answering."));
+               "reflector, or its portal is not answering. You can write the talkgroup "
+               "info yourself on the Names tab."));
         return;
     }
 
-    QList<ReflectorTalkgroupsDialog::Entry> entries;
-    entries.reserve(ids.size());
-    for (quint32 id : std::as_const(ids)) {
-        ReflectorTalkgroupsDialog::Entry e;
-        e.id         = id;
-        e.name       = names.value(id);
-        e.nodes      = nodeCount.value(id, 0);
-        e.monitored  = isMon.contains(id);
-        e.switchable = isSw.contains(id);
-        entries.append(e);
-    }
-
-    /* Busiest first: on a reflector with eighteen named talkgroups, the three
-     * anyone uses should not be somewhere in the middle of an ordered list. */
-    std::sort(entries.begin(), entries.end(),
-              [](const ReflectorTalkgroupsDialog::Entry &a,
-                 const ReflectorTalkgroupsDialog::Entry &b) {
-                  if (a.nodes != b.nodes) return a.nodes > b.nodes;
-                  return a.id < b.id;
-              });
-
     ReflectorTalkgroupsDialog dlg(entries, this);
+    if (!kept.isEmpty()) {
+        QStringList text;
+        for (quint32 id : std::as_const(kept)) text << QString::number(id);
+        dlg.setKeptNote(tr("Also in your configuration, and kept as they are: TG %1 — "
+                           "the reflector does not name them, so they are not listed.")
+                            .arg(text.join(QStringLiteral(", "))));
+    }
     if (dlg.exec() != QDialog::Accepted)
         return;
 
-    const QList<ReflectorTalkgroupsDialog::Entry> chosen = dlg.chosen();
-
-    /* Monitored: by number, with whatever priority was already set kept. */
-    QList<quint32> monitored;
-    QList<quint32> switchable;
-    for (const ReflectorTalkgroupsDialog::Entry &e : chosen) {
-        if (e.monitored)  monitored.append(e.id);
-        if (e.switchable) switchable.append(e.id);
-    }
-    std::sort(monitored.begin(), monitored.end());
-    if (monitored.size() > SVX_MAX_TG)
-        monitored.resize(SVX_MAX_TG);
-
-    QStringList monParts;
-    for (quint32 id : std::as_const(monitored)) {
-        const int p = qBound(0, priority.value(id, 0), SVX_MAX_PRIO);
-        monParts << QString::number(id) + QString(p, QLatin1Char('+'));
-    }
-
-    /* Switchable: the cycle keeps the order it had, and anything newly ticked
-     * joins the end. Re-sorting it would silently rearrange the sidebar. */
-    QList<quint32> ordered;
-    for (quint32 id : std::as_const(swOrder))
-        if (switchable.contains(id) && !ordered.contains(id))
-            ordered.append(id);
-    std::sort(switchable.begin(), switchable.end());
-    for (quint32 id : std::as_const(switchable))
-        if (!ordered.contains(id))
-            ordered.append(id);
-    if (ordered.size() > SVX_MAX_TG)
-        ordered.resize(SVX_MAX_TG);
-
-    QStringList swParts;
-    for (quint32 id : std::as_const(ordered))
-        swParts << QString::number(id);
-
-    /* ", " is what the core's own tglist_format() writes, so a list that did
-     * not really change compares equal and the file is left alone. */
-    m_monitored->setText(monParts.join(QStringLiteral(", ")));
-    m_switchable->setText(swParts.join(QStringLiteral(", ")));
+    const ReflectorTalkgroupsDialog::Fields f =
+        ReflectorTalkgroupsDialog::compose(dlg.chosen(), m_monitored->text(), m_switchable->text());
+    m_monitored->setText(f.monitored);
+    m_switchable->setText(f.switchable);
 }
 
 QWidget *PreferencesDialog::buildNamesTab()

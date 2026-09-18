@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QDateTime>
 #include <functional>
 
@@ -53,6 +54,38 @@ protected:
 private:
     quint32 m_tg;
 };
+
+/* A label that gives way. A location is as long as whoever typed it felt like
+ * — "Sint Martens Lierde" is a real one — and a plain QLabel would rather widen
+ * the whole window than lose a letter. This one takes the space that is left
+ * and ends in an ellipsis. The stylesheet still styles it: QSS colour and font
+ * size land in the widget's palette and font, which is what is painted with. */
+class ElidedLabel : public QLabel {
+public:
+    using QLabel::QLabel;
+
+    QSize minimumSizeHint() const override
+    {
+        return QSize(0, QLabel::minimumSizeHint().height());
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setFont(font());
+        p.setPen(palette().color(foregroundRole()));
+        p.drawText(rect(), int(Qt::AlignLeft | Qt::AlignVCenter) | Qt::TextSingleLine,
+                   fontMetrics().elidedText(text(), Qt::ElideRight, width()));
+    }
+};
+
+/* "Gent, Belgium" → "Gent". The row has room for the town; the tooltip has the
+ * rest. Same rule as the macOS app's bestCityLabel(). */
+QString townFrom(const QString &location)
+{
+    return location.section(QLatin1Char(','), 0, 0).trimmed();
+}
 
 QLabel *labelWithRole(const QString &text, const char *role, QWidget *parent)
 {
@@ -162,8 +195,16 @@ void ActivityPanel::buildUi()
     root->addStretch(1);
 }
 
+QString ActivityPanel::townOf(const QString &callsign) const
+{
+    if (!m_feed || !m_feed->isAvailable())
+        return QString();
+    const auto it = m_feed->nodes().constFind(callsign.toUpper());
+    return it == m_feed->nodes().constEnd() ? QString() : townFrom(it->location);
+}
+
 ActivityPanel::Row ActivityPanel::makeRow(const QString &callsign, quint32 tg,
-                                          bool live, quint64 stamp)
+                                          bool live, quint64 stamp, const QString &location)
 {
     auto *w = new ClickableRow(tg, this);
     w->onClicked = [this, tg]() { if (tg) emit talkgroupChosen(tg); };
@@ -192,7 +233,12 @@ ActivityPanel::Row ActivityPanel::makeRow(const QString &callsign, quint32 tg,
 
     lay->addWidget(labelWithRole(tr("TG %1").arg(tg), "chip", w));
 
-    lay->addStretch(1);
+    /* Where they are, in the space that is left — it stretches, so the time
+     * column stays on the right edge whether there is a location or not. */
+    auto *where = new ElidedLabel(townFrom(location), w);
+    Theme::setRole(where, "dim");
+    where->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    lay->addWidget(where, 1);
 
     auto *time = labelWithRole(QString(), "time", w);
     time->setMinimumWidth(Theme::space(52));
@@ -222,7 +268,8 @@ void ActivityPanel::rebuildLocal(quint64 nowMs)
             /* .full, not .call: ON6URE-TPAD and ON6URE-PI are different
              * stations, and a list that renders both as "ON6URE" cannot tell
              * you which one is on the air. */
-            Row r = makeRow(QString::fromUtf8(t.full), t.tg, true, t.start_ms);
+            Row r = makeRow(QString::fromUtf8(t.full), t.tg, true, t.start_ms,
+                            townOf(QString::fromUtf8(t.full)));
             m_localLayout->addWidget(r.widget);
             m_localRows.append(r);
         }
@@ -260,7 +307,8 @@ void ActivityPanel::rebuildRecent(quint64 nowMs)
 
         for (int i = 0; i < tgm->n_recent; ++i) {
             const tgm_recent &t = tgm->recent[i];
-            Row r = makeRow(QString::fromUtf8(t.full), t.tg, false, t.stop_ms);
+            Row r = makeRow(QString::fromUtf8(t.full), t.tg, false, t.stop_ms,
+                            townOf(QString::fromUtf8(t.full)));
             m_recentLayout->addWidget(r.widget);
             m_recentRows.append(r);
         }
@@ -301,10 +349,11 @@ void ActivityPanel::rebuildReflector(quint64 nowMs)
 
     QString sig;
     for (int i = 0; i < n; ++i)
-        sig += QStringLiteral("%1@%2@%3@%4,").arg(all[i].callsign)
-                                             .arg(all[i].tg)
-                                             .arg(all[i].lastActivityMs())
-                                             .arg(all[i].active ? 1 : 0);
+        sig += QStringLiteral("%1@%2@%3@%4@%5,").arg(all[i].callsign)
+                                                .arg(all[i].tg)
+                                                .arg(all[i].lastActivityMs())
+                                                .arg(all[i].active ? 1 : 0)
+                                                .arg(all[i].location);
 
     if (sig != m_reflectorSig) {
         m_reflectorSig = sig;
@@ -315,7 +364,7 @@ void ActivityPanel::rebuildReflector(quint64 nowMs)
         for (int i = 0; i < n; ++i) {
             const ReflectorFeed::Session &s = all[i];
             Row r = makeRow(s.callsign, quint32(qMax(0, s.tg)), s.active,
-                            quint64(s.active ? s.startMs : s.endMs));
+                            quint64(s.active ? s.startMs : s.endMs), s.location);
             if (!s.location.isEmpty()) {
                 const QString tgName = (m_portal && s.tg > 0)
                                      ? m_portal->talkgroupName(quint32(s.tg)) : QString();

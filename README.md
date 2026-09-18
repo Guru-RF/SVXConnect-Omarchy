@@ -126,8 +126,9 @@ When the feed is up:
 
 - **Recent** is replaced by **Reflector · 24h**, the portal's own history. It
   covers *every* talkgroup the reflector saw, not only the ones you monitor,
-  and it goes back before you connected. Rows still switch talkgroup when
-  clicked.
+  and it goes back before you connected. Each row says where the station is —
+  the town, with the full location in the tooltip — and still switches
+  talkgroup when clicked.
 - **the map** has something to draw: one marker per node the reflector knows
   the position of, the current talker highlighted and labelled, and your own
   station marked separately.
@@ -140,18 +141,19 @@ entirely, which is how you see exactly what a plain reflector gives you.
 
 Talkgroup numbers are only written down in two places: the reflector's portal,
 and other people's configurations. So **Preferences → Talkgroups → Load from
-reflector…** asks the reflector. It puts together what the portal *names*
-(`talkgroups.json`) and what its nodes are *listening to* right now, and shows
-you the list with a node count against each one — the honest measure of whether
-a talkgroup is worth having, since the portal names some nobody uses and misses
-the ones two stations agreed on last week.
+reflector…** asks the reflector. It lists the talkgroups the talkgroup info JSON
+names — those and no others — with, against each, how many nodes are listening
+to it right now: the honest measure of whether a talkgroup is worth having,
+since a portal names some that nobody uses. A talkgroup that only the live feed
+has seen (two stations agreeing on a number, or somebody's typo) is not offered
+as if the reflector vouched for it.
 
 Tick what you want. **Monitor** is everything you want to hear; **Switch** is
 the short list the sidebar cycles through, so ticking Switch ticks Monitor too.
 Priorities you have already set (`8+`, `8++`) survive, and the switch order you
 already had is kept — anything newly ticked joins the end. Talkgroups you have
-configured that this reflector has never heard of stay in the list and stay
-ticked; nothing is silently dropped.
+configured that the reflector does not name are not listed, and not lost
+either: they are carried through untouched, and the dialog says which ones.
 
 **All switchable** and **None switchable** tick or clear the whole Switch
 column at once, beside the same pair for Monitor.
