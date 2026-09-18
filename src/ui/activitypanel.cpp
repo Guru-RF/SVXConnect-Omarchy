@@ -5,6 +5,7 @@
 #include "ui/theme.h"
 #include "ui/timefmt.h"
 #include "net/reflectorfeed.h"
+#include "net/portalinfo.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -166,7 +167,11 @@ ActivityPanel::Row ActivityPanel::makeRow(const QString &callsign, quint32 tg,
 {
     auto *w = new ClickableRow(tg, this);
     w->onClicked = [this, tg]() { if (tg) emit talkgroupChosen(tg); };
-    w->setToolTip(tr("Switch to TG %1").arg(tg));
+    /* The chip on the row stays "TG 8" — it is a column, and names are as long
+     * as their sysop felt like — but the tooltip has room for what it is. */
+    const QString tgName = m_portal ? m_portal->talkgroupName(tg) : QString();
+    w->setToolTip(tgName.isEmpty() ? tr("Switch to TG %1").arg(tg)
+                                   : tr("Switch to TG %1 — %2").arg(tg).arg(tgName));
 
     auto *lay = new QHBoxLayout(w);
     lay->setContentsMargins(Theme::space(8), Theme::space(5), Theme::space(8), Theme::space(5));
@@ -271,6 +276,19 @@ void ActivityPanel::setFeed(ReflectorFeed *feed)
     m_feed = feed;
 }
 
+void ActivityPanel::setPortalInfo(PortalInfo *portal)
+{
+    m_portal = portal;
+    if (!m_portal)
+        return;
+    /* Rows are built once and kept, so names arriving later need a rebuild. */
+    connect(m_portal, &PortalInfo::changed, this, [this]() {
+        m_localSig.clear();
+        m_recentSig.clear();
+        m_reflectorSig.clear();
+    });
+}
+
 void ActivityPanel::rebuildReflector(quint64 nowMs)
 {
     /* The feed keeps 60 sessions. The panel scrolls, so showing more than the
@@ -298,10 +316,16 @@ void ActivityPanel::rebuildReflector(quint64 nowMs)
             const ReflectorFeed::Session &s = all[i];
             Row r = makeRow(s.callsign, quint32(qMax(0, s.tg)), s.active,
                             quint64(s.active ? s.startMs : s.endMs));
-            if (!s.location.isEmpty())
+            if (!s.location.isEmpty()) {
+                const QString tgName = (m_portal && s.tg > 0)
+                                     ? m_portal->talkgroupName(quint32(s.tg)) : QString();
+                const QString tgText = tgName.isEmpty()
+                                     ? tr("TG %1").arg(s.tg)
+                                     : tr("TG %1 — %2").arg(s.tg).arg(tgName);
                 r.widget->setToolTip(s.tg > 0
-                    ? tr("%1 — %2. Click to switch to TG %3.").arg(s.callsign, s.location).arg(s.tg)
+                    ? tr("%1 — %2. Click to switch to %3.").arg(s.callsign, s.location, tgText)
                     : tr("%1 — %2").arg(s.callsign, s.location));
+            }
             m_reflectorLayout->addWidget(r.widget);
             m_reflectorRows.append(r);
         }

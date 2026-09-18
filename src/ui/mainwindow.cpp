@@ -205,6 +205,9 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
      * its sysops wrote — and QRZ through ham-tools, if it is installed. Both
      * are decoration on top of the feed: everything here works without them. */
     m_portal = new PortalInfo(this);
+    m_portal->setNetworkEnabled(ReflectorFeed::enabledSetting());
+    m_sidebar->setPortalInfo(m_portal);
+    m_activity->setPortalInfo(m_portal);
     connect(m_portal, &PortalInfo::changed, this, [this]() {
         refreshMapMarkers();
         if (!m_stationOpen.isEmpty())
@@ -234,7 +237,7 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
      * a busy portal sends dozens of messages a second and the map does not
      * need to know about any single one of them. */
     m_mapTick = new QTimer(this);
-    m_mapTick->setInterval(500);
+    m_mapTick->setInterval(250);   /* what the Android and macOS apps sample at */
     connect(m_mapTick, &QTimer::timeout, this, &MainWindow::refreshMapMarkers);
 
     /* The feed, the portal and QRZ all exist by this line — and it has to be
@@ -744,6 +747,10 @@ void MainWindow::refreshMapMarkers()
 
     const QString own = m_cfg ? QString::fromUtf8(m_cfg->callsign).toUpper() : QString();
 
+    /* Your own transmission frames the map like anybody else's. The feed will
+     * say so too, a moment later; the core knows now. */
+    const bool txNow = m_app && app_tx_active(m_app);
+
     if (m_feed) {
         const QHash<QString, ReflectorFeed::Node> &nodes = m_feed->nodes();
         markers.reserve(nodes.size() + 1);
@@ -761,8 +768,10 @@ void MainWindow::refreshMapMarkers()
             m.online       = n.online;
             m.latitude     = n.latitude;
             m.longitude    = n.longitude;
-            m.talking      = n.isTalker;
             m.self         = !own.isEmpty() && n.callsign.startsWith(own);
+            /* Exact match for the transmit flag: startsWith also matches
+             * ON6URE-HS, which is a different radio that is not transmitting. */
+            m.talking      = n.isTalker || (txNow && n.callsign == own);
             markers.append(m);
         }
     }
@@ -782,6 +791,7 @@ void MainWindow::refreshMapMarkers()
             me.latitude  = cfg->latitude;
             me.longitude = cfg->longitude;
             me.self      = true;
+            me.talking   = txNow;
             markers.append(me);
         }
     }
@@ -1124,6 +1134,8 @@ void MainWindow::onPreferences()
         m_feed->setEnabled(ReflectorFeed::enabledSetting());
         applyMapVisibility();
     }
+    if (m_portal)
+        m_portal->setNetworkEnabled(ReflectorFeed::enabledSetting());
     if (m_map)
         m_map->setHomeRadiusKm(QSettings().value(QStringLiteral("map/homeRadiusKm"), 100).toInt());
     refreshPttHint();

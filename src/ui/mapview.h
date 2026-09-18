@@ -100,6 +100,19 @@ public:
     void setHomeRadiusKm(int km);
     int  homeRadiusKm() const { return m_homeRadiusKm; }
 
+    /* Where the camera is. Read by tests/test_mapcamera.cpp, which is the only
+     * way to know the camera logic works: it is all timing and state, and a
+     * screenshot of a map says nothing about whether it would have moved. */
+    int    zoom()            const { return m_zoom; }
+    double centreLatitude()  const { return m_latitude; }
+    double centreLongitude() const { return m_longitude; }
+
+    /* How long a talker must transmit before the view moves for it, how long
+     * the talker view lingers after the last one stops, and how long a manual
+     * pan holds the camera off. The defaults are 1.5 s, 3 s and 30 s; the
+     * setter exists so a test does not have to take half a minute. */
+    void setCameraTiming(qint64 qualifyMs, qint64 lingerMs, qint64 holdMs);
+
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
@@ -139,10 +152,32 @@ private:
     static int zoomForSpan(double spanMetres, int px, double latitude);
     static double metresPerPixel(int zoom, double latitude);
 
-    /* Which talkers have been transmitting long enough to be worth moving the
-     * map for, and the bookkeeping behind that. */
-    void updateTalkerClock();
-    bool followIfNeeded(bool firstMarkers);
+    /* ---- the camera ----
+     *
+     * The view is decided by a SIGNATURE — who has been transmitting long
+     * enough to count, where you are, and the home radius — and the map moves
+     * when that signature changes, never otherwise. That single rule is what
+     * the Android and macOS apps both do, and it gives all the behaviour at
+     * once: a talker pulls the view in (even one already on screen, which the
+     * first version of this refused to do — on a 100 km home view every
+     * Belgian repeater is "already on screen", so the map never moved at
+     * all); the end of the talking sends it home again; and an unchanged
+     * situation never yanks the view on a tick.
+     *
+     * Two refinements on top. The talker view LINGERS for a moment after the
+     * last talker stops, so the gap between two overs of one QSO does not
+     * bounce the map home and back. And a manual pan or zoom HOLDS the camera
+     * off for a while — the reference apps do not protect a pan at all, and
+     * having the map snatched from under the cursor is the one thing about
+     * them not worth copying — but the hold expires, so the map does not stay
+     * dead for the rest of the session because someone scrolled once. */
+    void    updateTalkerClock();
+    QVector<int> qualifiedTalkers() const;          /* indices into m_markers */
+    bool    userHolding();                          /* also expires the hold  */
+    void    noteUserMove();
+    bool    refreshCamera(bool force);
+    void    frame(const QVector<int> &talkers);     /* choose what to look at */
+    void    applyTarget();                          /* and turn it into a zoom */
 
     QPointF centreTile() const;                 /* map centre, in tile units  */
     QPointF toWidget(double lat, double lon) const;
@@ -200,6 +235,24 @@ private:
      * key-ups would otherwise throw the view around. */
     QHash<QString, qint64> m_talkerSince;
     QElapsedTimer          m_clock;
+
+    /* What the camera is looking at, in ground units: the zoom is derived when
+     * it is applied, so a resized pane keeps its subject and only re-zooms. */
+    struct CameraTarget {
+        bool   valid = false;
+        double latitude = 0.0, longitude = 0.0;
+        double spanLatM = 0.0, spanLonM = 0.0;
+    };
+    CameraTarget m_target;
+    QString      m_cameraSig;               /* last signature framed; empty = must frame */
+    bool         m_followingTalkers = false;
+    qint64       m_talkEndedAt = -1;        /* when the talker set went empty, for the linger */
+    qint64       m_userMovedAt = 0;         /* last manual pan or zoom, for the hold          */
+    int          m_wheelAccum  = 0;         /* high-resolution wheels send fractions of a step */
+
+    qint64 m_qualifyMs = 1500;              /* see setCameraTiming() */
+    qint64 m_lingerMs  = 3000;
+    qint64 m_holdMs    = 30000;
 
     double m_latitude  = 50.5;   /* somewhere over Belgium, until told better */
     double m_longitude = 4.5;

@@ -13,6 +13,11 @@
 #include "ui/talkgroupsdialog.h"
 
 #include <QSettings>
+#include <QLocale>
+#include <QDateTime>
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QPlainTextEdit>
 #include <QTabWidget>
 #include <QScrollArea>
 #include <QFormLayout>
@@ -96,10 +101,13 @@ PreferencesDialog::PreferencesDialog(svx_app *app, const QString &configPath, QW
     root->setSpacing(Theme::space(10));
 
     auto *tabs = new QTabWidget(this);
+    m_tabs = tabs;
     tabs->setDocumentMode(true);
     tabs->addTab(scrolled(buildConnectionTab()), tr("Connection"));
     tabs->addTab(scrolled(buildAudioTab()),      tr("Audio"));
     tabs->addTab(scrolled(buildTalkgroupsTab()), tr("Talkgroups"));
+    m_namesPage = scrolled(buildNamesTab());
+    tabs->addTab(m_namesPage, tr("Names"));
     tabs->addTab(scrolled(buildPttTab()),        tr("Push-to-talk"));
     tabs->addTab(scrolled(buildGeneralTab()),    tr("General"));
     root->addWidget(tabs, 1);
@@ -164,6 +172,7 @@ QWidget *PreferencesDialog::buildConnectionTab()
     /* The enhanced reflector. Not a host to type: it is derived from the one
      * above, probed for, and either there or not. */
     m_enhanced = new QCheckBox(tr("Use the reflector's portal feed when it has one"), page);
+    connect(m_enhanced, &QCheckBox::toggled, this, [this]() { refreshJsonEditors(); });
     m_enhanced->setToolTip(tr("Looks for a portal at wss://reflector.%1/")
                                .arg(tr("<your reflector>")));
     f->addRow(QString(), m_enhanced);
@@ -441,6 +450,23 @@ void PreferencesDialog::setReflectorInfo(ReflectorFeed *feed, PortalInfo *portal
     m_feed   = feed;
     m_portal = portal;
     refreshReflectorButton();
+
+    loadJsonEditors();
+    refreshJsonEditors();
+    refreshPortalStatus();
+
+    if (!m_portal)
+        return;
+    connect(m_portal, &PortalInfo::statusChanged, this, &PreferencesDialog::refreshPortalStatus);
+    connect(m_portal, &PortalInfo::changed, this, [this]() {
+        refreshReflectorButton();
+        /* A fetch landed while the dialog is open. Show it — unless the
+         * operator is in the middle of editing, whose text is theirs. */
+        const bool untouched = m_tgJson->toPlainText().trimmed() == m_tgJsonLoaded
+                            && m_callJson->toPlainText().trimmed() == m_callJsonLoaded;
+        if (untouched)
+            loadJsonEditors();
+    });
 }
 
 void PreferencesDialog::refreshReflectorButton()
@@ -573,6 +599,155 @@ void PreferencesDialog::onLoadFromReflector()
      * not really change compares equal and the file is left alone. */
     m_monitored->setText(monParts.join(QStringLiteral(", ")));
     m_switchable->setText(swParts.join(QStringLiteral(", ")));
+}
+
+QWidget *PreferencesDialog::buildNamesTab()
+{
+    auto *page = new QWidget;
+    auto *f = form(page);
+
+    f->addRow(QString(), hint(
+        tr("What talkgroups and stations are called. It is a pair of plain JSON "
+           "documents: an enhanced reflector publishes them and they are fetched "
+           "once a day, and on a plain reflector — which publishes nothing — you "
+           "can write them yourself. The names appear under the active talkgroup, "
+           "in tooltips, in the talkgroup picker and on the map."), page));
+
+    m_portalAuto = new QCheckBox(tr("Update from the reflector's portal automatically"), page);
+    connect(m_portalAuto, &QCheckBox::toggled, this, [this]() { refreshJsonEditors(); });
+    f->addRow(QString(), m_portalAuto);
+
+    auto *row = new QHBoxLayout;
+    row->setSpacing(Theme::space(10));
+    m_portalUpdate = new QPushButton(tr("Update now"), page);
+    m_portalUpdate->setCursor(Qt::PointingHandCursor);
+    connect(m_portalUpdate, &QPushButton::clicked, this, [this]() {
+        if (m_portal) m_portal->refresh();
+    });
+    row->addWidget(m_portalUpdate);
+    m_portalStatus = hint(QString(), page);
+    row->addWidget(m_portalStatus, 1);
+    f->addRow(QString(), row);
+
+    m_tgJson = new QPlainTextEdit(page);
+    m_tgJson->setMinimumHeight(Theme::space(120));
+    m_tgJson->setPlaceholderText(
+        QStringLiteral("{\"4\": \"4m Repeaters\", \"8\": \"70cm Repeaters\", \"9990\": \"Parrot\"}"));
+    f->addRow(tr("Talkgroup info"), m_tgJson);
+    f->addRow(QString(), hint(
+        tr("The talkgroup number, as text, and what to call it."), page));
+
+    m_callJson = new QPlainTextEdit(page);
+    m_callJson->setMinimumHeight(Theme::space(140));
+    m_callJson->setPlaceholderText(
+        QStringLiteral("{\"ON0ORA\": \"TX:438.8000 RX:431.2000\\nCTCSS: 131.8\"}"));
+    f->addRow(tr("Callsign info"), m_callJson);
+    f->addRow(QString(), hint(
+        tr("A callsign and a free description, shown on that station's card on the "
+           "map. Use \\n for a line break."), page));
+
+    m_jsonError = hint(QString(), page);
+    Theme::setTone(m_jsonError, "error");
+    m_jsonError->hide();
+    f->addRow(QString(), m_jsonError);
+
+    return page;
+}
+
+void PreferencesDialog::loadJsonEditors()
+{
+    if (!m_tgJson)
+        return;
+
+    /* Indented, because the portal serves one long line and nobody can find a
+     * talkgroup in that. The text put in is remembered, so at commit time an
+     * edit can be told from merely having looked. */
+    auto pretty = [](const QByteArray &raw) {
+        const QJsonDocument doc = QJsonDocument::fromJson(raw);
+        return doc.isObject() && !doc.object().isEmpty()
+             ? QString::fromUtf8(doc.toJson(QJsonDocument::Indented)).trimmed()
+             : QString::fromUtf8(raw).trimmed();
+    };
+
+    m_tgJsonLoaded   = m_portal ? pretty(m_portal->rawTalkgroups()) : QString();
+    m_callJsonLoaded = m_portal ? pretty(m_portal->rawCallsigns())  : QString();
+    m_tgJson->setPlainText(m_tgJsonLoaded);
+    m_callJson->setPlainText(m_callJsonLoaded);
+}
+
+void PreferencesDialog::refreshJsonEditors()
+{
+    if (!m_tgJson)
+        return;
+
+    /* Editable when nothing else is going to overwrite them: on a plain
+     * reflector, or with automatic updates off. The same rule as the Android
+     * and macOS apps — an editor whose contents vanish overnight is a trap. */
+    const bool editable = !m_enhanced->isChecked() || !m_portalAuto->isChecked();
+    m_tgJson->setReadOnly(!editable);
+    m_callJson->setReadOnly(!editable);
+
+    const QString why = editable
+        ? QString()
+        : tr("Kept up to date from the portal. Turn automatic updates off to edit it.");
+    m_tgJson->setToolTip(why);
+    m_callJson->setToolTip(why);
+}
+
+void PreferencesDialog::refreshPortalStatus()
+{
+    if (!m_portalStatus)
+        return;
+
+    const bool fetching = m_portal && m_portal->isFetching();
+    m_portalUpdate->setEnabled(m_portal && !fetching);
+    m_portalUpdate->setText(fetching ? tr("Updating…") : tr("Update now"));
+
+    if (!m_portal) {
+        m_portalStatus->clear();
+        return;
+    }
+    if (!m_portal->lastError().isEmpty() && !fetching) {
+        Theme::setTone(m_portalStatus, "error");
+        m_portalStatus->setText(m_portal->lastError());
+        return;
+    }
+
+    Theme::setTone(m_portalStatus, "");
+    const qint64 at = m_portal->lastFetched();
+    m_portalStatus->setText(at > 0
+        ? tr("Last updated %1").arg(QLocale().toString(QDateTime::fromSecsSinceEpoch(at),
+                                                       QLocale::ShortFormat))
+        : tr("Never updated"));
+}
+
+bool PreferencesDialog::commitJson()
+{
+    PortalInfo::setAutoUpdateSetting(m_portalAuto->isChecked());
+
+    if (!m_portal || m_tgJson->isReadOnly())
+        return true;
+
+    const QString tg   = m_tgJson->toPlainText().trimmed();
+    const QString call = m_callJson->toPlainText().trimmed();
+    if (tg == m_tgJsonLoaded && call == m_callJsonLoaded)
+        return true;                       /* looked, did not touch */
+
+    QString error;
+    if (!m_portal->setManualJson(tg.toUtf8(), call.toUtf8(), &error)) {
+        /* Nothing was stored. Say what is wrong where it is wrong, rather than
+         * closing the dialog on a document that silently shows no names. */
+        m_jsonError->setText(error);
+        m_jsonError->show();
+        if (m_tabs && m_namesPage)
+            m_tabs->setCurrentWidget(m_namesPage);
+        return false;
+    }
+
+    m_jsonError->hide();
+    m_tgJsonLoaded   = tg;
+    m_callJsonLoaded = call;
+    return true;
 }
 
 QWidget *PreferencesDialog::buildPttTab()
@@ -805,6 +980,8 @@ void PreferencesDialog::load()
 
     m_enhanced->setChecked(ReflectorFeed::enabledSetting());
     refreshReflectorButton();
+    m_portalAuto->setChecked(PortalInfo::autoUpdateSetting());
+    refreshJsonEditors();
     m_mapRadius->setValue(QSettings().value(QStringLiteral("map/homeRadiusKm"), 100).toInt());
 
     m_volume->setValue(m_store.valueInt(QStringLiteral("output_volume_pct")));
@@ -1054,6 +1231,12 @@ void PreferencesDialog::refreshDeviceLists()
 
 bool PreferencesDialog::commit()
 {
+    /* First, because it is the one part that can refuse: a JSON document that
+     * does not parse keeps the dialog open, and nothing else should have been
+     * half-saved by then. */
+    if (!commitJson())
+        return false;
+
     LocationDialog::setAutoModeSetting(
         m_posMode->currentData().toString() == QLatin1String("auto"));
     ReflectorFeed::setEnabledSetting(m_enhanced->isChecked());

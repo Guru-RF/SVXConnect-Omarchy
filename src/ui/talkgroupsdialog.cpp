@@ -122,6 +122,32 @@ ReflectorTalkgroupsDialog::ReflectorTalkgroupsDialog(const QList<Entry> &entries
         }
     });
     tools->addWidget(none);
+
+    tools->addSpacing(Theme::space(16));
+
+    /* The same pair for the Switch column. Ticking a Switch box ticks its
+     * Monitor box through the per-row connection above, so "All switchable"
+     * is also "monitor all" — which is what it has to mean: a talkgroup in the
+     * sidebar's cycle that you are not listening to is a way to transmit into
+     * silence. */
+    auto *allSwitch = new QPushButton(tr("All switchable"), this);
+    allSwitch->setFlat(true);
+    allSwitch->setCursor(Qt::PointingHandCursor);
+    connect(allSwitch, &QPushButton::clicked, this, [this]() {
+        for (const Row &r : std::as_const(m_rows)) r.switchTo->setChecked(true);
+    });
+    tools->addWidget(allSwitch);
+
+    auto *noSwitch = new QPushButton(tr("None switchable"), this);
+    noSwitch->setFlat(true);
+    noSwitch->setCursor(Qt::PointingHandCursor);
+    connect(noSwitch, &QPushButton::clicked, this, [this]() {
+        /* Only the cycle is emptied; what is monitored is a separate decision
+         * and stays as it was. */
+        for (const Row &r : std::as_const(m_rows)) r.switchTo->setChecked(false);
+    });
+    tools->addWidget(noSwitch);
+
     tools->addStretch(1);
     root->addLayout(tools);
 

@@ -18,6 +18,7 @@ class QSlider;
 class QVBoxLayout;
 class LevelMeter;
 class TalkgroupButton;
+class PortalInfo;
 
 class Sidebar : public QWidget {
     Q_OBJECT
@@ -36,6 +37,10 @@ public:
      * startup and after a settings change, never on a tick. */
     void rebuildTalkgroups();
 
+    /* Where talkgroup names come from: the reflector portal's talkgroups.json,
+     * or the JSON the operator pasted in Preferences. Not owned. */
+    void setPortalInfo(PortalInfo *portal);
+
 private:
     void buildUi();
     void applyLockVisuals(bool locked);
@@ -45,6 +50,10 @@ private:
 
     QLabel      *m_activeTg  = nullptr;
     QLabel      *m_tgInfo    = nullptr;
+    QString      m_tgInfoText;          /* what it shows, so the tick can skip setText */
+    bool         m_tgInfoDirty = true;
+    PortalInfo  *m_portal    = nullptr;
+    void         refreshNames();
     QLabel      *m_preempt   = nullptr;
     QToolButton *m_lock      = nullptr;
     QVBoxLayout *m_tgLayout  = nullptr;

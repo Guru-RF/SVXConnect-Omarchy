@@ -206,6 +206,17 @@ target_compile_definitions(test_qrzlookup PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_qrzlookup PRIVATE svxcore Qt6::Core Qt6::Sql)
 add_test(NAME qrzlookup COMMAND test_qrzlookup)
 
+add_executable(test_mapcamera
+    tests/test_mapcamera.cpp
+    src/ui/mapview.cpp
+    src/ui/omarchytheme.cpp)
+target_include_directories(test_mapcamera PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_mapcamera PRIVATE
+    SVXCONNECT_VERSION="${SVXCONNECT_VERSION}"
+    QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_mapcamera PRIVATE svxcore Qt6::Widgets Qt6::Network Qt6::Svg)
+add_test(NAME mapcamera COMMAND test_mapcamera)
+
 add_executable(test_hyprlandbinding
     tests/test_hyprlandbinding.cpp
     src/ptt/hyprlandbinding.cpp)

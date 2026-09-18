@@ -2,6 +2,7 @@
  * SVXConnect-Omarchy — Copyright (c) 2026 Diëlectricum BV
  */
 #include "ui/sidebar.h"
+#include "net/portalinfo.h"
 #include "ui/talkgroupbutton.h"
 #include "ui/levelmeter.h"
 #include "ui/theme.h"
@@ -72,11 +73,14 @@ void Sidebar::buildUi()
 
     applyLockVisuals(false);
 
-    /* Free-form label a sysop can attach to a talkgroup. Populated from the
-     * portal's talkgroups.json once a portal fetcher exists; the widget ships
-     * now so the layout does not shift when it arrives. */
+    /* What the talkgroup is CALLED — "70cm Repeaters" under "TG 8". Every
+     * SVXConnect client shows this line, in green, under the active talkgroup;
+     * it comes from the talkgroup info JSON, which is either the reflector
+     * portal's talkgroups.json or whatever the operator pasted in Preferences.
+     * The number stays the number: the name goes under it, never instead. */
     m_tgInfo = new QLabel(this);
     Theme::setRole(m_tgInfo, "hint");
+    Theme::setTone(m_tgInfo, "ok");
     m_tgInfo->setWordWrap(true);
     m_tgInfo->hide();
     root->addWidget(m_tgInfo);
@@ -217,6 +221,23 @@ void Sidebar::rebuildTalkgroups()
         m_tgLayout->insertWidget(m_tgLayout->count() - 1, b);
         m_buttons.append(b);
     }
+
+    refreshNames();
+}
+
+void Sidebar::setPortalInfo(PortalInfo *portal)
+{
+    m_portal = portal;
+    if (m_portal)
+        connect(m_portal, &PortalInfo::changed, this, &Sidebar::refreshNames);
+    refreshNames();
+}
+
+void Sidebar::refreshNames()
+{
+    for (TalkgroupButton *b : std::as_const(m_buttons))
+        b->setName(m_portal ? m_portal->talkgroupName(b->talkgroup()) : QString());
+    m_tgInfoDirty = true;   /* the names changed under the line that shows one */
 }
 
 void Sidebar::tickModel(quint64 nowMs)
@@ -233,6 +254,18 @@ void Sidebar::tickModel(quint64 nowMs)
         m_activeTg->setText(tr("Monitor"));
     else
         m_activeTg->setText(tr("TG %1").arg(sel));
+
+    /* The name line: only while connected and on a real talkgroup, and hidden
+     * — no placeholder — when the reflector has no name for it. */
+    QString name;
+    if (st == RC_CONNECTED && sel > 0 && m_portal)
+        name = m_portal->talkgroupName(sel);
+    if (m_tgInfoDirty || name != m_tgInfoText) {
+        m_tgInfoDirty = false;
+        m_tgInfoText  = name;
+        m_tgInfo->setText(name);
+        m_tgInfo->setVisible(!name.isEmpty());
+    }
 
     const bool locked = tgm_locked(tgm) != 0;
     if (!m_lockInit || locked != m_lockState) {

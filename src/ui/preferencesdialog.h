@@ -38,6 +38,8 @@
 class QLineEdit;
 class QSpinBox;
 class QCheckBox;
+class QPlainTextEdit;
+class QTabWidget;
 class ReflectorFeed;
 class PortalInfo;
 class QComboBox;
@@ -89,6 +91,14 @@ private slots:
      * talkgroups are called or which of them anyone is listening to. */
     void onLoadFromReflector();
     void refreshReflectorButton();
+
+    /* The talkgroup and callsign info JSON: visible, editable, and the
+     * operator's own — see net/portalinfo.h. */
+    QWidget *buildNamesTab();
+    void loadJsonEditors();
+    void refreshJsonEditors();
+    void refreshPortalStatus();
+    bool commitJson();
 
     void refreshDeviceLists();
     void onBindHyprland();
@@ -143,6 +153,17 @@ private:
 
     /* Talkgroups */
     QPushButton *m_loadTgs = nullptr;
+
+    QTabWidget     *m_tabs         = nullptr;
+    QWidget        *m_namesPage    = nullptr;
+    QCheckBox      *m_portalAuto   = nullptr;
+    QPushButton    *m_portalUpdate = nullptr;
+    QLabel         *m_portalStatus = nullptr;
+    QPlainTextEdit *m_tgJson       = nullptr;
+    QPlainTextEdit *m_callJson     = nullptr;
+    QLabel         *m_jsonError    = nullptr;
+    QString         m_tgJsonLoaded;      /* what was put in the editors, so a */
+    QString         m_callJsonLoaded;    /* real edit can be told from none   */
     QLineEdit *m_switchable = nullptr;
     QLineEdit *m_monitored  = nullptr;
     QSpinBox  *m_defaultTg  = nullptr;

@@ -22,6 +22,15 @@
  * them monitor several more. Both are a decoration on top of the feed, never a
  * substitute for it, and every consumer has to read well with them absent.
  *
+ * THE JSON IS ALSO THE OPERATOR'S
+ * ------------------------------
+ * Every SVXConnect client treats the talkgroup info as a JSON document the
+ * operator can see and edit, not as an opaque cache: on a plain reflector with
+ * no portal it is the ONLY way to get names at all, and on an enhanced one it
+ * is how a name the sysop got wrong is corrected. So the raw text is exposed,
+ * setManualJson() accepts a replacement, and "update automatically" can be
+ * switched off so a hand-edited document is not overwritten the next morning.
+ *
  * CACHING
  * -------
  * The raw bodies are kept in QSettings and refreshed once a day, the way the
@@ -38,6 +47,7 @@
 #include <QUrl>
 
 class QNetworkAccessManager;
+class QTimer;
 
 class PortalInfo : public QObject {
     Q_OBJECT
@@ -51,6 +61,31 @@ public:
 
     /* Fetch now, whatever the cache says. */
     void refresh();
+
+    /* No portal, no fetching: the enhanced-reflector switch in Preferences
+     * turns this off too. Cached and hand-pasted names still load — that is
+     * exactly the plain-reflector case they exist for. */
+    void setNetworkEnabled(bool on);
+
+    /* The documents as stored, for the editors in Preferences. */
+    QByteArray rawTalkgroups() const { return m_rawTalkgroups; }
+    QByteArray rawCallsigns()  const { return m_rawCallsigns; }
+
+    /* Replace the documents with the operator's own. Empty text clears one.
+     * Returns false, with the reason, when either is not a JSON object —
+     * checked BEFORE anything is stored, so a typo cannot blank the names that
+     * were working. */
+    bool setManualJson(const QByteArray &talkgroups, const QByteArray &callsigns,
+                       QString *error);
+
+    /* Whether the portal may overwrite the documents by itself. On by default;
+     * off is how a hand-edited document survives the daily refresh. */
+    static bool autoUpdateSetting();
+    static void setAutoUpdateSetting(bool on);
+
+    bool    isFetching()  const { return m_pending > 0; }
+    qint64  lastFetched() const;                 /* epoch seconds, 0 = never */
+    QString lastError()   const { return m_lastError; }
 
     bool hasTalkgroups() const { return !m_talkgroups.isEmpty(); }
 
@@ -76,6 +111,10 @@ signals:
     /* New metadata is in hand — or the cache was loaded for a new reflector. */
     void changed();
 
+    /* A fetch started, finished or failed: what Preferences shows beside its
+     * "Update now" button. */
+    void statusChanged();
+
 private:
     void load();
     void fetch(const QString &file);
@@ -87,6 +126,12 @@ private:
 
     QHash<quint32, QString> m_talkgroups;
     QHash<QString, QString> m_callsigns;
+    QByteArray m_rawTalkgroups;
+    QByteArray m_rawCallsigns;
+
+    bool    m_network = true;
+    int     m_pending = 0;
+    QString m_lastError;
 };
 
 #endif

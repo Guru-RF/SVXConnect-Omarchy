@@ -15,6 +15,8 @@
 #include <cstdlib>
 
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QTemporaryDir>
 #include <QUrl>
 
 #include "net/portalinfo.h"
@@ -33,8 +35,17 @@ void check(bool ok, const char *what)
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    /* The operator's own documents are stored in QSettings, so the settings
+     * are pointed at a directory that is thrown away — a test must never be
+     * able to overwrite somebody's real talkgroup names. */
+    QTemporaryDir sandbox;
+    qputenv("XDG_CONFIG_HOME", sandbox.path().toUtf8());
+    QCoreApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("SVXConnect-test"));
+    QCoreApplication::setApplicationName(QStringLiteral("portalinfo"));
+
     /* ---- the URL ---- */
 
     check(PortalInfo::portalBaseUrl(QStringLiteral("be.svx.link")).toString()
@@ -88,6 +99,54 @@ int main()
           "the description keeps its line breaks");
     check(calls.value(QStringLiteral("ON0ORA")).startsWith(QStringLiteral("TX:438.8000")),
           "and its contents");
+
+    /* ---- the operator's own documents ---- */
+
+    PortalInfo info;
+    info.setNetworkEnabled(false);              /* nothing here may touch a network */
+    info.setReflector(QStringLiteral("plain.example"));
+    check(!info.hasTalkgroups(), "a plain reflector starts with no names at all");
+
+    QString error;
+    check(info.setManualJson(R"({"8": "70cm Repeaters", "9990": "Parrot"})", QByteArray(), &error),
+          "a hand-written talkgroup document is accepted");
+    check(info.talkgroupName(8) == QStringLiteral("70cm Repeaters"),
+          "and names a talkgroup on a reflector that publishes nothing");
+    check(info.rawTalkgroups().contains("Parrot"), "the text is kept as written, for the editor");
+
+    /* The trap this exists to avoid: a typo must not blank what was working. */
+    check(!info.setManualJson(R"({"8": "70cm Repeaters",})", QByteArray(), &error),
+          "a document that does not parse is refused");
+    check(!error.isEmpty(), "with a reason the dialog can show");
+    check(info.talkgroupName(8) == QStringLiteral("70cm Repeaters"),
+          "and the names that were working are still there");
+
+    check(!info.setManualJson(R"(["8", "9990"])", QByteArray(), &error),
+          "a JSON array is refused: it has to be an object");
+    check(!info.setManualJson(R"({"8": "ok"})", R"(not json)", &error),
+          "a bad callsign document refuses the pair");
+    check(info.talkgroupName(9990) == QStringLiteral("Parrot"),
+          "so the talkgroups were not half-saved next to it");
+
+    check(info.setManualJson(QByteArray(), R"({"on0ora": "TX:438.8000\nCTCSS: 131.8"})", &error),
+          "clearing one document and writing the other is fine");
+    check(!info.hasTalkgroups(), "empty text clears the talkgroup names");
+    check(info.callsignInfo(QStringLiteral("ON0ORA")).contains(QLatin1Char('\n')),
+          "and the station description keeps its line break");
+
+    /* It belongs to one reflector: a list of Belgian names is wrong, not stale,
+     * on another network. */
+    PortalInfo other;
+    other.setNetworkEnabled(false);
+    other.setReflector(QStringLiteral("elsewhere.example"));
+    check(other.callsignInfo(QStringLiteral("ON0ORA")).isEmpty(),
+          "another reflector does not inherit this one's documents");
+
+    PortalInfo again;
+    again.setNetworkEnabled(false);
+    again.setReflector(QStringLiteral("plain.example"));
+    check(!again.callsignInfo(QStringLiteral("ON0ORA")).isEmpty(),
+          "but the same reflector gets them back after a restart");
 
     std::printf("\n%d/%d passed\n", g_run - g_fail, g_run);
     return g_fail ? EXIT_FAILURE : EXIT_SUCCESS;

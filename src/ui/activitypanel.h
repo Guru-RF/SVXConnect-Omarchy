@@ -36,6 +36,7 @@
 class QLabel;
 class QVBoxLayout;
 class ReflectorFeed;
+class PortalInfo;
 
 class ActivityPanel : public QWidget {
     Q_OBJECT
@@ -47,6 +48,9 @@ public:
 
     /* The enhanced reflector's feed, or null. Not owned. */
     void setFeed(ReflectorFeed *feed);
+
+    /* Talkgroup names, for the row tooltips. Not owned. */
+    void setPortalInfo(PortalInfo *portal);
 
 signals:
     /* A row was clicked — switch to that talkgroup. */
@@ -97,7 +101,8 @@ private:
     QString m_recentSig;
     QString m_reflectorSig;
 
-    ReflectorFeed *m_feed = nullptr;
+    ReflectorFeed *m_feed   = nullptr;
+    PortalInfo    *m_portal = nullptr;
 };
 
 #endif

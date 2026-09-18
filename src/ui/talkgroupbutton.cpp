@@ -44,7 +44,7 @@ TalkgroupButton::TalkgroupButton(quint32 tg, int priority, QWidget *parent)
      * focused button would take it and switch talkgroup instead. */
     setFocusPolicy(Qt::NoFocus);
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    setToolTip(tr("Switch to TG %1. Right-click to mute.").arg(tg));
+    refreshToolTip();
 
     /* The row height follows the font size. */
     connect(&OmarchyTheme::get(), &OmarchyTheme::changed, this, [this]() { updateGeometry(); });
@@ -60,16 +60,31 @@ void TalkgroupButton::setMuted(bool muted)
     if (m_muted == muted) return;
     m_muted = muted;
 
+    refreshToolTip();
+    update();
+}
+
+void TalkgroupButton::setName(const QString &name)
+{
+    if (m_name == name) return;
+    m_name = name;
+    refreshToolTip();
+}
+
+void TalkgroupButton::refreshToolTip()
+{
     /* Muting is not a volume control: the talkgroup leaves the subscription
      * sent to the reflector, so nothing from it arrives — no audio, and no
      * entries in Recent either. Say so, rather than leaving someone to wonder
      * why a talkgroup has been quiet all afternoon. */
-    setToolTip(muted
+    const QString hint = m_muted
         ? tr("TG %1 is muted: it is not received at all, so no activity from it "
              "is listed. Right-click to unmute.").arg(m_tg)
-        : tr("Switch to TG %1. Right-click to mute.").arg(m_tg));
+        : tr("Switch to TG %1. Right-click to mute.").arg(m_tg);
 
-    update();
+    /* The reflector's name for it first, when there is one — the way the
+     * Windows client does it. */
+    setToolTip(m_name.isEmpty() ? hint : m_name + QLatin1Char('\n') + hint);
 }
 
 void TalkgroupButton::setTalker(const QString &callsign)

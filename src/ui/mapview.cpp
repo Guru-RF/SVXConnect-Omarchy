@@ -36,7 +36,6 @@ constexpr int kMaxFlight = 4;
 /* The macOS app's camera, in its own units. A single talker gets a 20 km-wide
  * view; "home" is whatever the user set, 100 km by default. */
 constexpr double kTalkerSpanM      = 20000.0;
-constexpr qint64 kTalkerQualifyMs  = 1500;    /* before the view will move for it */
 constexpr double kMetresPerDegLat  = 111000.0;
 
 QString keyOf(int z, int x, int y)
@@ -89,6 +88,10 @@ MapView::MapView(QWidget *parent) : QWidget(parent)
     setMinimumHeight(Theme::space(170));
     setMouseTracking(true);
     setCursor(Qt::OpenHandCursor);
+    /* Click focus only: +, -, 0 and Escape work once the map has been clicked,
+     * and the window's Space-to-transmit is never taken by a widget that
+     * merely had the pointer over it. Unhandled keys propagate upwards. */
+    setFocusPolicy(Qt::ClickFocus);
     setAttribute(Qt::WA_StyledBackground, false);
 
     m_net = new QNetworkAccessManager(this);
@@ -159,8 +162,8 @@ void MapView::setHomeRadiusKm(int km)
     if (want == m_homeRadiusKm)
         return;
     m_homeRadiusKm = want;
-    if (!m_userMoved)
-        fitToMarkers();
+    m_cameraSig.clear();
+    refreshCamera(false);
     update();
 }
 
@@ -408,8 +411,7 @@ bool MapView::openStation(const QString &callsign)
                                      -Theme::space(20), -Theme::space(20)).contains(at)) {
             m_latitude  = m_markers[i].latitude;
             m_longitude = m_markers[i].longitude;
-            m_userMoved = true;
-            refreshControls();
+            noteUserMove();
         }
         openCard(i);
         return true;
@@ -520,15 +522,14 @@ void MapView::setMarkers(const QVector<Marker> &markers)
     };
 
     const bool changed = !same(markers, m_markers);
-    const bool hadNone = m_markers.isEmpty();
     if (changed)
         m_markers = markers;
 
     /* Run even when nothing changed: a talker qualifies for a camera move by
-     * the passage of time, not by a new message, and the caller ticks this
-     * every half second. */
+     * the passage of time, not by a new message — and so do the linger and the
+     * manual hold expiring. The caller ticks this several times a second. */
     updateTalkerClock();
-    const bool moved = followIfNeeded(hadNone && changed);
+    const bool moved = refreshCamera(false);
 
     refreshControls();
     if (changed) {
@@ -558,36 +559,128 @@ void MapView::updateTalkerClock()
     }
 }
 
-bool MapView::followIfNeeded(bool firstMarkers)
+void MapView::setCameraTiming(qint64 qualifyMs, qint64 lingerMs, qint64 holdMs)
 {
-    if (m_userMoved || m_markers.isEmpty())
-        return false;
+    m_qualifyMs = qMax<qint64>(0, qualifyMs);
+    m_lingerMs  = qMax<qint64>(0, lingerMs);
+    m_holdMs    = qMax<qint64>(0, holdMs);
+}
 
-    if (firstMarkers) {
-        fitToMarkers();
-        return true;
-    }
-
-    /* Someone has been transmitting for a moment and cannot be seen: go to
-     * them. A talker already on screen does not move the view — the marker is
-     * right there, and a map that jumps at every over is unusable. */
+QVector<int> MapView::qualifiedTalkers() const
+{
     const qint64 now = m_clock.elapsed();
-    const QRectF visible = QRectF(rect()).adjusted(Theme::space(20), Theme::space(20),
-                                                   -Theme::space(20), -Theme::space(20));
-    for (const Marker &m : m_markers) {
+    QVector<int> out;
+    for (int i = 0; i < m_markers.size(); ++i) {
+        const Marker &m = m_markers[i];
         if (!m.talking)
             continue;
-        if (now - m_talkerSince.value(m.callsign, now) < kTalkerQualifyMs)
-            continue;
-        if (!visible.contains(toWidget(m.latitude, m.longitude))) {
-            fitToMarkers();
-            return true;
-        }
+        const auto it = m_talkerSince.constFind(m.callsign);
+        if (it != m_talkerSince.constEnd() && now - it.value() >= m_qualifyMs)
+            out.append(i);
     }
+    return out;
+}
+
+void MapView::noteUserMove()
+{
+    m_userMoved   = true;
+    m_userMovedAt = m_clock.elapsed();
+    refreshControls();
+}
+
+bool MapView::userHolding()
+{
+    if (!m_userMoved)
+        return false;
+    if (m_dragging)
+        return true;
+    if (m_clock.elapsed() - m_userMovedAt < m_holdMs)
+        return true;
+
+    /* Expired. The signature is deliberately left alone: whatever changed
+     * while the hold was on is still a change, and gets framed now. */
+    m_userMoved = false;
+    refreshControls();
     return false;
 }
 
+bool MapView::refreshCamera(bool force)
+{
+    /* Never decide before the pane has a size: a signature committed against
+     * a zero-sized widget is a camera move that silently never happened. */
+    if (m_markers.isEmpty() || width() <= 0 || height() <= 0)
+        return false;
+    if (!force && userHolding())
+        return false;       /* not committed, so the move is deferred, not lost */
+
+    const QVector<int> talkers = qualifiedTalkers();
+
+    if (!talkers.isEmpty()) {
+        m_talkEndedAt = -1;
+    } else if (m_followingTalkers && !force && m_lingerMs > 0) {
+        /* The last talker just stopped. Stay on them for a moment: the gap
+         * between two overs of the same QSO should not send the map home and
+         * back. */
+        const qint64 now = m_clock.elapsed();
+        if (m_talkEndedAt < 0)
+            m_talkEndedAt = now;
+        if (now - m_talkEndedAt < m_lingerMs)
+            return false;
+    }
+
+    /* The signature: who counts as talking and where they are, where home is,
+     * and how wide home is. Four decimals is about eleven metres, which keeps
+     * GPS jitter on a mobile from re-framing the map every tick. */
+    QStringList parts;
+    for (int i : talkers)
+        parts << QStringLiteral("%1:%2:%3").arg(m_markers[i].callsign)
+                     .arg(m_markers[i].latitude,  0, 'f', 4)
+                     .arg(m_markers[i].longitude, 0, 'f', 4);
+    parts.sort();
+
+    QString own;
+    for (const Marker &m : m_markers) {
+        if (m.self) {
+            own = QStringLiteral("%1:%2").arg(m.latitude, 0, 'f', 4).arg(m.longitude, 0, 'f', 4);
+            break;
+        }
+    }
+
+    QString sig = QStringLiteral("T[%1]O[%2]R[%3]")
+                      .arg(parts.join(QLatin1Char('|')), own).arg(m_homeRadiusKm);
+    if (parts.isEmpty() && own.isEmpty())
+        sig += QStringLiteral("N[%1]").arg(m_markers.size());   /* the fit-everything fallback */
+
+    if (!force && sig == m_cameraSig)
+        return false;
+
+    frame(talkers);
+    m_cameraSig        = sig;       /* committed only after an actual move */
+    m_followingTalkers = !talkers.isEmpty();
+    m_talkEndedAt      = -1;
+    return true;
+}
+
+void MapView::applyTarget()
+{
+    if (!m_target.valid || width() <= 0 || height() <= 0)
+        return;
+
+    m_latitude  = m_target.latitude;
+    m_longitude = m_target.longitude;
+    m_zoom = qMin(zoomForSpan(m_target.spanLatM, height(), m_latitude),
+                  zoomForSpan(m_target.spanLonM, width(),  m_latitude));
+    refreshControls();
+    placeCard();
+    update();
+}
+
 void MapView::fitToMarkers()
+{
+    frame(qualifiedTalkers());
+}
+
+void MapView::frame(const QVector<int> &talkers)
 {
     if (m_markers.isEmpty())
         return;
@@ -603,12 +696,9 @@ void MapView::fitToMarkers()
      * setting says. Fitting everything sounds neutral and is not — one station
      * on holiday in Egypt and one placeholder in Sweden are enough to zoom a
      * Belgian reflector out to a view of the Atlantic. */
-    const qint64 now = m_clock.elapsed();
-
     QVector<Marker> subject;
-    for (const Marker &m : m_markers)
-        if (m.talking && now - m_talkerSince.value(m.callsign, now) >= kTalkerQualifyMs)
-            subject.append(m);
+    for (int i : talkers)
+        subject.append(m_markers[i]);
 
     double minSpanM = kTalkerSpanM;
     double widen    = 1.5;
@@ -667,16 +757,21 @@ void MapView::fitToMarkers()
     const double spanLatM = qMax((north - south) * kMetresPerDegLat * widen, minSpanM);
     const double spanLonM = qMax((east - west) * kMetresPerDegLat * cosLat * widen, minSpanM);
 
-    m_zoom = qMin(zoomForSpan(spanLatM, height(), m_latitude),
-                  zoomForSpan(spanLonM, width(),  m_latitude));
-    refreshControls();
-    update();
+    m_target.valid     = true;
+    m_target.latitude  = m_latitude;
+    m_target.longitude = m_longitude;
+    m_target.spanLatM  = spanLatM;
+    m_target.spanLonM  = spanLonM;
+    applyTarget();
 }
 
 void MapView::resetView()
 {
-    m_userMoved = false;
-    fitToMarkers();
+    /* The button's promise is "the current talker, or home" — now, whatever a
+     * manual hold or an unchanged signature would otherwise say. */
+    m_userMoved   = false;
+    m_talkEndedAt = -1;
+    refreshCamera(true);
     refreshControls();
 }
 
@@ -927,7 +1022,7 @@ void MapView::mouseMoveEvent(QMouseEvent *e)
     while (m_longitude >  180.0) m_longitude -= 360.0;
     while (m_longitude < -180.0) m_longitude += 360.0;
 
-    m_userMoved = true;
+    noteUserMove();
     placeCard();
     update();
 }
@@ -939,6 +1034,8 @@ void MapView::mouseReleaseEvent(QMouseEvent *e)
 
     m_dragging = false;
     setCursor(Qt::OpenHandCursor);
+    if (wasDrag)
+        m_userMovedAt = m_clock.elapsed();   /* the hold counts from letting go */
 
     if (e->button() != Qt::LeftButton || wasDrag)
         return;
@@ -997,9 +1094,8 @@ void MapView::zoomTo(int zoom, const QPointF &anchor)
     while (m_longitude < -180.0) m_longitude += 360.0;
 
     /* Zooming is taking over the view, from the buttons as much as from the
-     * wheel — otherwise the next marker update would undo it. */
-    m_userMoved = true;
-    refreshControls();
+     * wheel — otherwise the next camera decision would undo it. */
+    noteUserMove();
     placeCard();
     update();
 }
@@ -1013,9 +1109,9 @@ void MapView::refreshControls()
         return;
     m_zoomIn->setEnabled(m_zoom < kMaxZoom);
     m_zoomOut->setEnabled(m_zoom > kMinZoom);
-    /* Recentring is only meaningful when there is something to centre on, and
-     * only a change when the view has been moved off it. */
-    m_recentre->setEnabled(!m_markers.isEmpty() && m_userMoved);
+    /* Always available while there is something to centre on: besides undoing
+     * a pan, it ends a manual hold early and re-frames a talker at once. */
+    m_recentre->setEnabled(!m_markers.isEmpty());
 }
 
 void MapView::layOutControls()
@@ -1046,7 +1142,17 @@ void MapView::layOutControls()
 
 void MapView::wheelEvent(QWheelEvent *e)
 {
-    zoomTo(m_zoom + (e->angleDelta().y() > 0 ? 1 : -1), e->position());
+    /* A notch is 120 units, but touchpads and high-resolution wheels send
+     * fractions of one — and each fraction used to be a whole zoom level, so a
+     * gentle two-finger scroll went from Belgium to the planet. */
+    const int dy = e->angleDelta().y();
+    if (dy == 0) {
+        e->ignore();
+        return;
+    }
+    m_wheelAccum += dy;
+    while (m_wheelAccum >= 120)  { zoomTo(m_zoom + 1, e->position()); m_wheelAccum -= 120; }
+    while (m_wheelAccum <= -120) { zoomTo(m_zoom - 1, e->position()); m_wheelAccum += 120; }
     e->accept();
 }
 
@@ -1059,7 +1165,9 @@ void MapView::resizeEvent(QResizeEvent *e)
      * shown at — so the fit computed then is for the wrong pane and leaves the
      * stations off screen. Refit on every resize until the user takes over. */
     if (!m_userMoved)
-        fitToMarkers();
+        applyTarget();               /* same subject, new zoom */
+    if (m_cameraSig.isEmpty())
+        refreshCamera(false);        /* nothing framed yet: the pane had no size */
     layOutControls();
     placeCard();
     update();
