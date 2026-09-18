@@ -70,4 +70,17 @@ if [ ! -s "$WORK/shot.png" ]; then
     exit 1
 fi
 
-echo "smoketest: OK — started, built its window, and quit cleanly"
+# Surviving is not the same as working. 0.1.9 fixed the 0.1.8 crash by moving a
+# call above the objects it configures, where null checks turned it into a
+# no-op: the application started perfectly and never once looked for an
+# enhanced reflector. "It did not crash" passed; this would not have.
+if ! grep -q "reflector feed: probing wss://reflector.invalid/" "$WORK/log"; then
+    echo "smoketest: started, but never probed for the reflector's portal feed" >&2
+    exit 1
+fi
+if grep -q "internal:" "$WORK/log"; then
+    echo "smoketest: the application reported an internal wiring error" >&2
+    exit 1
+fi
+
+echo "smoketest: OK — started, built its window, probed for the portal, and quit cleanly"

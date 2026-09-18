@@ -146,14 +146,8 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     buildUi();
     buildActions();
 
-    /* Everything that talks to the reflector is built by now, so this is where
-     * they are pointed at it — in ONE place. Doing it inline as each object was
-     * created is what shipped 0.1.8 dereferencing a null portal on every start
-     * that had a core, which is every start that is not a screenshot. */
-    if (m_app) {
+    if (m_app)
         m_cfg = app_config(m_app);
-        applyReflectorHost(QString::fromUtf8(m_cfg->reflector));
-    }
 
     /* Global push-to-talk. Constructed even without a core so the settings
      * page can probe backends in SVX_WINDOW_ONLY mode; the manager simply
@@ -242,6 +236,14 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     m_mapTick = new QTimer(this);
     m_mapTick->setInterval(500);
     connect(m_mapTick, &QTimer::timeout, this, &MainWindow::refreshMapMarkers);
+
+    /* The feed, the portal and QRZ all exist by this line — and it has to be
+     * THIS line, after all three. Pointing them at the reflector inline as
+     * each was created is how 0.1.8 dereferenced a portal that did not exist
+     * yet; moving the call to the top of the constructor, above all of them,
+     * is how 0.1.9 stopped crashing and silently stopped probing instead. */
+    if (m_cfg)
+        applyReflectorHost(QString::fromUtf8(m_cfg->reflector));
 
     QSettings s;
     if (s.contains(QStringLiteral("window/geometry")))
@@ -974,10 +976,16 @@ bool MainWindow::showStationOnMap(const QString &callsign)
 
 void MainWindow::applyReflectorHost(const QString &host)
 {
-    if (m_feed)
-        m_feed->setReflector(host);
-    if (m_portal)
-        m_portal->setReflector(host);
+    /* Being called before these exist is an ordering bug in the constructor,
+     * and the polite null checks that used to be here turned exactly that bug
+     * into a release that ran fine and never looked for a portal. Say so. */
+    if (!m_feed || !m_portal) {
+        log_err("internal: reflector host applied before the feed and portal exist — "
+                "the enhanced reflector will not be detected");
+        return;
+    }
+    m_feed->setReflector(host);
+    m_portal->setReflector(host);
 }
 
 void MainWindow::setOfflineConfig(const svx_config *cfg)
