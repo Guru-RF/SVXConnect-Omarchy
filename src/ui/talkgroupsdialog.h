@@ -59,7 +59,7 @@ public:
     /* What to list: the talkgroups the JSON names — and only those; the feed's
      * node counts annotate them but do not add to them — ticked according to
      * the two configuration fields as they stand. With no names at all, the
-     * feed's talkgroups are the fallback. Busiest first. `keptOut`, if given,
+     * feed's talkgroups are the fallback. Ordered by talkgroup number. `keptOut`, if given,
      * receives the configured talkgroups that are NOT listed. */
     static QList<Entry> entriesFor(const QHash<quint32, QString> &names,
                                    const QHash<quint32, int> &nodeCount,

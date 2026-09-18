@@ -28,7 +28,7 @@ ReflectorTalkgroupsDialog::ReflectorTalkgroupsDialog(const QList<Entry> &entries
     root->setSpacing(Theme::space(10));
 
     auto *intro = new QLabel(
-        tr("The talkgroups this reflector names, busiest first. "
+        tr("The talkgroups this reflector names, by number. "
            "<b>Monitor</b> is everything you want to hear; <b>Switch</b> is the short "
            "list the sidebar cycles through, so keep it short."), this);
     intro->setWordWrap(true);
@@ -237,10 +237,11 @@ ReflectorTalkgroupsDialog::entriesFor(const QHash<quint32, QString> &names,
         entries.append(e);
     }
 
-    /* Busiest first: on a reflector with eighteen named talkgroups, the three
-     * anyone uses should not be somewhere in the middle of an ordered list. */
+    /* By talkgroup number. It was busiest-first, which put the three anyone
+     * uses at the top — and made every other talkgroup impossible to find,
+     * because a node count is not something anybody looks a talkgroup up by.
+     * The number is; the Nodes column still says how busy each one is. */
     std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
-        if (a.nodes != b.nodes) return a.nodes > b.nodes;
         return a.id < b.id;
     });
     return entries;

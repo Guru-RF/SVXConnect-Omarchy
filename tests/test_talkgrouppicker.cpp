@@ -81,7 +81,8 @@ int main()
           "a talkgroup only the feed has seen is not offered");
     check(find(list, 4) && find(list, 4)->nodes == 0,
           "a named talkgroup nobody is on is still listed, with a count of none");
-    check(list.first().id == 8 && list.at(1).id == 1745, "busiest first");
+    check(list.at(0).id == 4 && list.at(1).id == 8 && list.at(2).id == 1745 && list.at(3).id == 9990,
+          "ordered by talkgroup number, not by how busy each one is");
     check(find(list, 8)->nodes == 73, "the feed's count annotates what the JSON lists");
     check(find(list, 8)->name == QStringLiteral("70cm Repeaters"), "with its name");
 

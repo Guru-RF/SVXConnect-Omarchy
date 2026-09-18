@@ -142,7 +142,7 @@ entirely, which is how you see exactly what a plain reflector gives you.
 Talkgroup numbers are only written down in two places: the reflector's portal,
 and other people's configurations. So **Preferences → Talkgroups → Load from
 reflector…** asks the reflector. It lists the talkgroups the talkgroup info JSON
-names — those and no others — with, against each, how many nodes are listening
+names — those and no others — in number order, with, against each, how many nodes are listening
 to it right now: the honest measure of whether a talkgroup is worth having,
 since a portal names some that nobody uses. A talkgroup that only the live feed
 has seen (two stations agreeing on a number, or somebody's typo) is not offered
