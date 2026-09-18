@@ -153,7 +153,34 @@ already had is kept — anything newly ticked joins the end. Talkgroups you have
 configured that this reflector has never heard of stay in the list and stay
 ticked; nothing is silently dropped.
 
+**All switchable** and **None switchable** tick or clear the whole Switch
+column at once, beside the same pair for Monitor.
+
 The button is disabled on a plain reflector, which cannot answer the question.
+
+### Talkgroup names
+
+What a talkgroup is *called* — "70cm Repeaters" for TG 8 — comes from the
+talkgroup info JSON, the same document every SVXConnect client uses:
+
+```json
+{"4": "4m Repeaters", "8": "70cm Repeaters", "9990": "Parrot, test your audio here"}
+```
+
+An enhanced reflector publishes it as `talkgroups.json` on its portal, and it is
+fetched once a day. The name appears in green under the active talkgroup in the
+sidebar, in the talkgroup buttons' and activity rows' tooltips, in the picker
+above, and on the map's station cards. The number stays the number: the name
+goes under it, never instead.
+
+**Preferences → Names** shows the document, and the matching one for stations
+(`callsigns.json`: a callsign and a free description — a repeater's frequencies
+and tones, usually). Both are yours to edit. On a plain reflector, which
+publishes nothing, writing them yourself is the only way to get names at all;
+on an enhanced one, turn **Update from the reflector's portal automatically**
+off first, or your edits are overwritten the next morning. A document that does
+not parse is refused with the reason and the position, and the names that were
+working stay in place.
 
 ### Station details, and QRZ
 
@@ -186,11 +213,16 @@ then sticks.
 
 Drag to pan, scroll to zoom, or use the **+ / − / recentre** controls at the top
 right — `+`, `-` and `0` do the same from the keyboard. Drag the strip above the
-map to resize it. The view follows whoever is transmitting, at 20 km, once they
-have been going for more than a moment; with nobody on the air it sits on your
-own station at the radius set in **Preferences → General → Map home view**
-(100 km by default). Panning or zooming takes the view over until you press
-recentre.
+map to resize it.
+
+The view zooms in on whoever is transmitting — a 20 km view, once they have
+been going for a second and a half, so a kerchunk does not move it — and that
+includes a station that was already visible. It stays on them for a few seconds
+after they stop, so the gap between two overs does not bounce the map, and then
+returns to your own station at the radius set in **Preferences → General → Map
+home view** (100 km by default). Your own transmissions frame the map the same
+way. Panning or zooming by hand holds the camera off for thirty seconds;
+**recentre** ends that at once.
 
 Hover a marker for its callsign and coordinates, or click it for the full card.
 The tiles come from OpenStreetMap, cached on disk between runs; under a dark
