@@ -271,7 +271,7 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     connect(m_meterTick, &QTimer::timeout, this, &MainWindow::tickMeters);
     m_meterTick->start();
 
-    refreshPttHint();
+    requestPttHint();
     applyMapVisibility();
     tickModel();
 }
@@ -661,7 +661,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 bool MainWindow::event(QEvent *event)
 {
     if (event->type() == QEvent::WindowActivate)
-        refreshPttHint();
+        requestPttHint();
     return QMainWindow::event(event);
 }
 
@@ -1035,13 +1035,24 @@ void MainWindow::refreshPttButton()
     }
 }
 
+void MainWindow::requestPttHint()
+{
+    /* Draw what is known now, and again when Hyprland has answered. hyprctl
+     * used to be run and WAITED for here, up to 3 s on every window
+     * activation — on the thread that runs the core, so a slow Hyprland
+     * socket overflowed the 1 s microphone ring mid-over. */
+    refreshPttHint();
+    if (HyprlandBinding::isHyprland())
+        HyprlandBinding::refreshBoundKeys(this, [this](const QString &) { refreshPttHint(); });
+}
+
 void MainWindow::refreshPttHint()
 {
     QString text;
     const char *tone = "";
 
     if (HyprlandBinding::isHyprland()) {
-        const QString keys = HyprlandBinding::boundKeys();
+        const QString keys = HyprlandBinding::cachedBoundKeys();
         if (!keys.isEmpty()) {
             text = tr("global  %1").arg(keys);
         } else {
@@ -1240,7 +1251,7 @@ void MainWindow::onPreferences()
     });
     connect(&dlg, &PreferencesDialog::pttBindingChanged, this, [this]() {
         applyPttBindings();
-        refreshPttHint();
+        requestPttHint();
     });
     connect(&dlg, &PreferencesDialog::talkgroupsChanged, this, [this]() {
         /* The buttons are rebuilt from the LIVE config, which the dialog did
@@ -1266,7 +1277,7 @@ void MainWindow::onPreferences()
         m_portal->setNetworkEnabled(ReflectorFeed::enabledSetting());
     if (m_map)
         m_map->setHomeRadiusKm(QSettings().value(QStringLiteral("map/homeRadiusKm"), 100).toInt());
-    refreshPttHint();
+    requestPttHint();
 }
 
 void MainWindow::applyPttBindings()

@@ -164,7 +164,9 @@ bool PortalBackend::hasDesktopFile()
 
 QString PortalBackend::activeTrigger() const
 {
-    return m_hyprland ? HyprlandBinding::boundKeys() : m_active;
+    /* The cached answer: this is called from PttManager's log line and from
+     * the window, and must never spawn hyprctl and wait for it. */
+    return m_hyprland ? HyprlandBinding::cachedBoundKeys() : m_active;
 }
 
 bool PortalBackend::isActive() const
@@ -441,15 +443,17 @@ void PortalBackend::onBindResponse(uint code, const QVariantMap &results)
     }
 
     if (m_hyprland) {
-        /* The key is whatever bindings.lua says, not anything in this reply. */
-        const QString keys = HyprlandBinding::boundKeys();
-        if (keys.isEmpty())
-            log_info("ptt: registered %s; no key is bound to it in Hyprland yet",
-                     HyprlandBinding::kShortcutId);
-        else
-            log_info("ptt: registered %s, bound to %s",
-                     HyprlandBinding::kShortcutId, qPrintable(keys));
-        emit triggerChanged(keys);
+        /* The key is whatever bindings.lua says, not anything in this reply —
+         * asked in the background. */
+        HyprlandBinding::refreshBoundKeys(this, [this](const QString &keys) {
+            if (keys.isEmpty())
+                log_info("ptt: registered %s; no key is bound to it in Hyprland yet",
+                         HyprlandBinding::kShortcutId);
+            else
+                log_info("ptt: registered %s, bound to %s",
+                         HyprlandBinding::kShortcutId, qPrintable(keys));
+            emit triggerChanged(keys);
+        });
         return;
     }
 

@@ -969,13 +969,22 @@ void PreferencesDialog::refreshPttStatus()
     m_pttPortalStatus->setText(text);
 
     if (HyprlandBinding::isHyprland()) {
-        const QString keys = HyprlandBinding::boundKeys();
-        setCurrentShortcut(keys);
-        if (m_pttKeys && m_pttKeys->text().isEmpty())
-            m_pttKeys->setText(keys.isEmpty() ? QLatin1String(HyprlandBinding::kDefaultKeys) : keys);
-        if (m_pttUnbind)
-            m_pttUnbind->setEnabled(!keys.isEmpty());
+        /* What was last known now, what Hyprland says when it says it:
+         * hyprctl is not waited for on the thread that runs the core. */
+        applyBoundKeys(HyprlandBinding::cachedBoundKeys());
+        HyprlandBinding::refreshBoundKeys(this, [this](const QString &keys) {
+            applyBoundKeys(keys);
+        });
     }
+}
+
+void PreferencesDialog::applyBoundKeys(const QString &keys)
+{
+    setCurrentShortcut(keys);
+    if (m_pttKeys && m_pttKeys->text().isEmpty())
+        m_pttKeys->setText(keys.isEmpty() ? QLatin1String(HyprlandBinding::kDefaultKeys) : keys);
+    if (m_pttUnbind)
+        m_pttUnbind->setEnabled(!keys.isEmpty());
 }
 
 void PreferencesDialog::setCurrentShortcut(const QString &human)
@@ -985,7 +994,7 @@ void PreferencesDialog::setCurrentShortcut(const QString &human)
 
     /* On Hyprland the portal has nothing to say about the key; trust the
      * binding over whatever the window passed in. */
-    const QString shown = HyprlandBinding::isHyprland() ? HyprlandBinding::boundKeys() : human;
+    const QString shown = HyprlandBinding::isHyprland() ? HyprlandBinding::cachedBoundKeys() : human;
 
     if (shown.isEmpty()) {
         m_pttShortcut->setText(tr("not bound"));

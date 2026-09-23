@@ -290,6 +290,14 @@ target_compile_definitions(test_portalbus PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_portalbus PRIVATE svxcore Qt6::Core Qt6::DBus)
 add_test(NAME portalbus COMMAND test_portalbus)
 
+add_executable(test_hyprctlasync
+    tests/test_hyprctlasync.cpp
+    src/ptt/hyprlandbinding.cpp)
+target_include_directories(test_hyprctlasync PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_hyprctlasync PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_hyprctlasync PRIVATE svxcore Qt6::Core)
+add_test(NAME hyprctlasync COMMAND test_hyprctlasync)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------

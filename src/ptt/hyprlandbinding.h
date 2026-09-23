@@ -34,6 +34,10 @@
 #include <QByteArray>
 #include <QString>
 
+#include <functional>
+
+class QObject;
+
 namespace HyprlandBinding {
 
 /* Hyprland names a portal shortcut "<app id>:<shortcut id>". The app id is the
@@ -54,10 +58,21 @@ bool isHyprland();
 /* ~/.config/hypr/bindings.lua (honouring XDG_CONFIG_HOME). */
 QString bindingsFile();
 
-/* LIVE. The key bound to push-to-talk, "SUPER + GRAVE", or empty. Asks
- * Hyprland first, then falls back to reading bindings.lua for a bind that was
- * written without our description. Spawns hyprctl: never call on a tick. */
-QString boundKeys();
+/* The answer the last refreshBoundKeys() got, without asking again. Empty
+ * until the first refresh has come back. */
+QString cachedBoundKeys();
+
+/* LIVE, asynchronous. The key bound to push-to-talk, "SUPER + GRAVE", or
+ * empty: asks Hyprland in the background, falling back to reading
+ * bindings.lua for a bind written without our description, and calls `done`
+ * with the answer on `context`'s thread once it is in — or with the fallback
+ * if hyprctl has not answered in 3 s. Returns immediately. `done` is dropped
+ * if `context` is destroyed first.
+ *
+ * There is deliberately no synchronous version. The interface asked on every
+ * window activation, and waiting up to 3 s for hyprctl on the GUI thread
+ * stalls the core it also runs. */
+void refreshBoundKeys(QObject *context, std::function<void(const QString &keys)> done);
 
 /* LIVE. What `keys` is already bound to, as its description, or empty. */
 QString conflictFor(const QString &keys);

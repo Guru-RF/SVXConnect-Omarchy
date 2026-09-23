@@ -145,7 +145,8 @@ private:
     void sampleAudioHealth();
     void onMicStalled();
     void onPlaybackStalled();
-    void refreshPttHint();
+    void refreshPttHint();    /* from what is known; never waits */
+    void requestPttHint();    /* ...and again once Hyprland has answered */
     void watchConfig();
 
     /* The map pane.
