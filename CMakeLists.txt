@@ -84,6 +84,8 @@ set(APP_SOURCES
     src/main.cpp
 
     src/core/coreloop.cpp        src/core/coreloop.h
+    src/core/coreaction.cpp      src/core/coreaction.h
+    src/core/audiohealth.cpp     src/core/audiohealth.h
     src/core/logbridge.cpp       src/core/logbridge.h
     src/core/runlock.cpp         src/core/runlock.h
     src/core/devlist.cpp         src/core/devlist.h
@@ -233,6 +235,94 @@ target_include_directories(test_hyprlandbinding PRIVATE "${CMAKE_SOURCE_DIR}/src
 target_compile_definitions(test_hyprlandbinding PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_hyprlandbinding PRIVATE svxcore Qt6::Core)
 add_test(NAME hyprlandbinding COMMAND test_hyprlandbinding)
+
+add_executable(test_coreloop
+    tests/test_coreloop.cpp
+    src/core/coreloop.cpp
+    src/core/coreaction.cpp)
+target_include_directories(test_coreloop PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_coreloop PRIVATE svxcore Qt6::Core)
+add_test(NAME coreloop COMMAND test_coreloop)
+
+add_executable(test_pttmanager
+    tests/test_pttmanager.cpp
+    src/ptt/pttbackend.h
+    src/ptt/pttmanager.cpp
+    src/ptt/portalbackend.cpp
+    src/ptt/hyprlandbinding.cpp
+    src/core/coreaction.cpp)
+target_include_directories(test_pttmanager PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_pttmanager PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_pttmanager PRIVATE svxcore Qt6::Core Qt6::DBus)
+add_test(NAME pttmanager COMMAND test_pttmanager)
+
+add_executable(test_audiohealth
+    tests/test_audiohealth.cpp
+    src/core/audiohealth.cpp)
+target_include_directories(test_audiohealth PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_audiohealth PRIVATE Qt6::Core)
+add_test(NAME audiohealth COMMAND test_audiohealth)
+
+add_executable(test_trayicon
+    tests/test_trayicon.cpp
+    src/ui/trayicon.cpp
+    src/ui/omarchytheme.cpp
+    src/core/coreaction.cpp)
+target_include_directories(test_trayicon PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_trayicon PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_trayicon PRIVATE svxcore Qt6::Widgets Qt6::Svg)
+add_test(NAME trayicon COMMAND test_trayicon)
+
+add_executable(test_notifierbus
+    tests/test_notifierbus.cpp
+    src/ui/notifier.cpp)
+target_include_directories(test_notifierbus PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_notifierbus PRIVATE svxcore Qt6::Core Qt6::DBus)
+add_test(NAME notifierbus COMMAND test_notifierbus)
+
+add_executable(test_portalbus
+    tests/test_portalbus.cpp
+    src/ptt/pttbackend.h
+    src/ptt/portalbackend.cpp
+    src/ptt/hyprlandbinding.cpp)
+target_include_directories(test_portalbus PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_portalbus PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_portalbus PRIVATE svxcore Qt6::Core Qt6::DBus)
+add_test(NAME portalbus COMMAND test_portalbus)
+
+add_executable(test_hyprctlasync
+    tests/test_hyprctlasync.cpp
+    src/ptt/hyprlandbinding.cpp)
+target_include_directories(test_hyprctlasync PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_hyprctlasync PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_hyprctlasync PRIVATE svxcore Qt6::Core)
+add_test(NAME hyprctlasync COMMAND test_hyprctlasync)
+
+add_executable(test_qrzasync
+    tests/test_qrzasync.cpp
+    src/net/qrzlookup.cpp)
+target_include_directories(test_qrzasync PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_qrzasync PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_qrzasync PRIVATE svxcore Qt6::Core Qt6::Sql)
+add_test(NAME qrzasync COMMAND test_qrzasync)
+
+add_executable(test_feedliveness
+    tests/test_feedliveness.cpp
+    src/net/reflectorfeed.cpp)
+target_include_directories(test_feedliveness PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_feedliveness PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_feedliveness PRIVATE svxcore Qt6::Core Qt6::Network Qt6::WebSockets)
+add_test(NAME feedliveness COMMAND test_feedliveness)
+
+add_executable(test_portalfetch
+    tests/test_portalfetch.cpp
+    src/net/portalinfo.cpp)
+target_include_directories(test_portalfetch PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_portalfetch PRIVATE
+    SVXCONNECT_VERSION="${SVXCONNECT_VERSION}"
+    QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_portalfetch PRIVATE svxcore Qt6::Core Qt6::Network)
+add_test(NAME portalfetch COMMAND test_portalfetch)
 
 # ---------------------------------------------------------------------------
 # Install

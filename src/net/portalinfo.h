@@ -59,6 +59,11 @@ public:
      * cached for it and, if that is a day old or missing, fetches. */
     void setReflector(const QString &host);
 
+    /* Fetch from this base URL instead of the one derived from a host, and
+     * load what is cached for it; nothing is fetched until refresh(). For the
+     * tests, which serve the two files from 127.0.0.1. */
+    void setPortalUrl(const QUrl &base);
+
     /* Fetch now, whatever the cache says. */
     void refresh();
 
@@ -118,6 +123,7 @@ signals:
 private:
     void load();
     void fetch(const QString &file);
+    void fileDone(quint64 round, bool isTalkgroups, bool ok);
 
     QNetworkAccessManager *m_net = nullptr;
 
@@ -131,6 +137,9 @@ private:
 
     bool    m_network = true;
     int     m_pending = 0;
+    quint64 m_round = 0;         /* bumped by refresh(): which replies count */
+    int     m_roundLeft = 0;
+    bool    m_roundTgOk = false;
     QString m_lastError;
 };
 

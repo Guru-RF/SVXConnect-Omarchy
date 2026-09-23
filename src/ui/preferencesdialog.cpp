@@ -798,14 +798,17 @@ QWidget *PreferencesDialog::buildGeneralTab()
            "window is closed to the tray. Click it to bring SVXConnect back. Your own "
            "transmissions never notify."), page));
 
+    /* No "no limit". This is the one defence against a lost push-to-talk
+     * release that does not depend on the desktop, the portal or this process
+     * noticing anything (see ptt/pttmanager.h), and 0 switched it off. A file
+     * that still says 0 shows here as the minimum and is saved as such. */
     m_txTimeout = new QSpinBox(page);
-    m_txTimeout->setRange(0, 3600);
+    m_txTimeout->setRange(10, 3600);
     m_txTimeout->setSuffix(tr(" s"));
-    m_txTimeout->setSpecialValueText(tr("no limit"));
     f->addRow(tr("Transmit timeout"), m_txTimeout);
     f->addRow(QString(), hint(
         tr("Hard un-key after this long, so a stuck push-to-talk cannot leave you "
-           "transmitting. Setting it to \"no limit\" is strongly discouraged."), page));
+           "transmitting."), page));
 
     m_logLevel = new QComboBox(page);
     /* The core's enum is "err|warn|info|debug" — the last is spelled debug,
@@ -966,13 +969,22 @@ void PreferencesDialog::refreshPttStatus()
     m_pttPortalStatus->setText(text);
 
     if (HyprlandBinding::isHyprland()) {
-        const QString keys = HyprlandBinding::boundKeys();
-        setCurrentShortcut(keys);
-        if (m_pttKeys && m_pttKeys->text().isEmpty())
-            m_pttKeys->setText(keys.isEmpty() ? QLatin1String(HyprlandBinding::kDefaultKeys) : keys);
-        if (m_pttUnbind)
-            m_pttUnbind->setEnabled(!keys.isEmpty());
+        /* What was last known now, what Hyprland says when it says it:
+         * hyprctl is not waited for on the thread that runs the core. */
+        applyBoundKeys(HyprlandBinding::cachedBoundKeys());
+        HyprlandBinding::refreshBoundKeys(this, [this](const QString &keys) {
+            applyBoundKeys(keys);
+        });
     }
+}
+
+void PreferencesDialog::applyBoundKeys(const QString &keys)
+{
+    setCurrentShortcut(keys);
+    if (m_pttKeys && m_pttKeys->text().isEmpty())
+        m_pttKeys->setText(keys.isEmpty() ? QLatin1String(HyprlandBinding::kDefaultKeys) : keys);
+    if (m_pttUnbind)
+        m_pttUnbind->setEnabled(!keys.isEmpty());
 }
 
 void PreferencesDialog::setCurrentShortcut(const QString &human)
@@ -982,7 +994,7 @@ void PreferencesDialog::setCurrentShortcut(const QString &human)
 
     /* On Hyprland the portal has nothing to say about the key; trust the
      * binding over whatever the window passed in. */
-    const QString shown = HyprlandBinding::isHyprland() ? HyprlandBinding::boundKeys() : human;
+    const QString shown = HyprlandBinding::isHyprland() ? HyprlandBinding::cachedBoundKeys() : human;
 
     if (shown.isEmpty()) {
         m_pttShortcut->setText(tr("not bound"));

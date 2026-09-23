@@ -17,6 +17,7 @@
 #include "ptt/pttmanager.h"
 #include "ptt/hyprlandbinding.h"
 #include "core/logbridge.h"
+#include "core/coreaction.h"
 
 #include <QApplication>
 #include <QVBoxLayout>
@@ -166,6 +167,12 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     });
     applyPttBindings();
 
+    /* The core's own backstop against a transmitter nobody can un-key. The
+     * dialog no longer offers 0, but a hand-edited file can still say it. */
+    if (m_cfg && m_cfg->tx_timeout_sec <= 0)
+        log_warn("tx_timeout_sec is 0: a lost push-to-talk release would transmit "
+                 "without limit — set a timeout in Preferences");
+
     /* The tray, and with it the ability to close the window without killing
      * the push-to-talk shortcut. */
     m_tray = new TrayIcon(m_app, this);
@@ -264,7 +271,7 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     connect(m_meterTick, &QTimer::timeout, this, &MainWindow::tickMeters);
     m_meterTick->start();
 
-    refreshPttHint();
+    requestPttHint();
     applyMapVisibility();
     tickModel();
 }
@@ -316,6 +323,12 @@ void MainWindow::buildUi()
     m_pttBanner = notice("error", central);
     m_pttBanner->installEventFilter(this);
     root->addWidget(m_pttBanner);
+
+    /* A microphone or speaker that stopped delivering, found by the window
+     * rather than the core — so, like the push-to-talk bar, not the core's. */
+    m_audioBanner = notice("error", central);
+    m_audioBanner->installEventFilter(this);
+    root->addWidget(m_audioBanner);
 
     /* Shown when svxconnect.conf changes on disk while running.
      *
@@ -503,7 +516,7 @@ void MainWindow::buildActions()
 
     QAction *reconnect = action(tr("Reconnect"), QStringLiteral("Ctrl+R"));
     connect(reconnect, &QAction::triggered, this, [this]() {
-        if (m_app) app_reconnect(m_app);
+        CoreAction::reconnect(m_app);
     });
 
     QAction *lock = action(tr("Lock talkgroup"), QStringLiteral("Ctrl+K"));
@@ -615,12 +628,12 @@ void MainWindow::keyPressEvent(QKeyEvent *e)
      * isAutoRepeat() is checked anyway, so holding Space does not chatter the
      * transmitter on and off. */
     if (e->key() == Qt::Key_Space && !e->isAutoRepeat()) {
-        app_ptt(m_app, CTL_TOGGLE);
+        CoreAction::ptt(m_app, CTL_TOGGLE);
         e->accept();
         return;
     }
     if (e->key() == Qt::Key_Escape) {
-        app_ptt(m_app, CTL_OFF);
+        CoreAction::ptt(m_app, CTL_OFF);
         e->accept();
         return;
     }
@@ -637,8 +650,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             m_banner->hide();
             return true;
         }
-        if (watched == m_pttBanner) {
-            m_pttBanner->hide();
+        if (watched == m_pttBanner || watched == m_audioBanner) {
+            static_cast<QWidget *>(watched)->hide();
             return true;
         }
     }
@@ -648,8 +661,32 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 bool MainWindow::event(QEvent *event)
 {
     if (event->type() == QEvent::WindowActivate)
-        refreshPttHint();
+        requestPttHint();
     return QMainWindow::event(event);
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+        releaseMouseHold("the window lost focus");
+    QMainWindow::changeEvent(event);
+}
+
+void MainWindow::hideEvent(QHideEvent *event)
+{
+    releaseMouseHold("the window was hidden");
+    QMainWindow::hideEvent(event);
+}
+
+void MainWindow::releaseMouseHold(const char *why)
+{
+    if (!m_ptt || !m_ptt->isDown())
+        return;
+
+    /* setDown(false) does not emit released(), so un-key explicitly. */
+    m_ptt->setDown(false);
+    CoreAction::ptt(m_app, CTL_OFF);
+    log_info("ptt: mouse hold released (%s)", why);
 }
 
 void MainWindow::onCoreChanged()
@@ -661,7 +698,13 @@ void MainWindow::tickModel()
 {
     const quint64 now = m_app ? now_ms() : 0;
 
-    if (m_tray) m_tray->tickModel();
+    sampleAudioHealth();
+    if (m_txHealth.takeStall())
+        onMicStalled();
+    if (m_playHealth.takeStall())
+        onPlaybackStalled();
+
+    if (m_tray) m_tray->tickModel(m_txHealth.state());
     m_status->tickModel(now);
     m_sidebar->tickModel(now);
     m_activity->tickModel(now);
@@ -748,8 +791,9 @@ void MainWindow::refreshMapMarkers()
     const QString own = m_cfg ? QString::fromUtf8(m_cfg->callsign).toUpper() : QString();
 
     /* Your own transmission frames the map like anybody else's. The feed will
-     * say so too, a moment later; the core knows now. */
-    const bool txNow = m_app && app_tx_active(m_app);
+     * say so too, a moment later; the core knows now — and only when audio is
+     * actually leaving, not merely when the transmitter is keyed. */
+    const bool txNow = m_txHealth.state() == TxMonitor::State::OnAir;
 
     if (m_feed) {
         const QHash<QString, ReflectorFeed::Node> &nodes = m_feed->nodes();
@@ -875,7 +919,72 @@ void MainWindow::resizeEvent(QResizeEvent *e)
 
 void MainWindow::tickMeters()
 {
-    m_sidebar->tickMeters();
+    sampleAudioHealth();
+    m_sidebar->tickMeters(m_txHealth.audioFlowing());
+}
+
+void MainWindow::sampleAudioHealth()
+{
+    if (!m_app)
+        return;
+
+    rc_stats st{};
+    rc_get_stats(app_rc(m_app), &st);
+    const qint64 now = qint64(now_ms());
+    m_txHealth.sample(app_tx_active(m_app) != 0, st.tx_packets, now);
+    m_playHealth.sample(app_audio_ready(m_app) != 0, app_jitter_ms(m_app), now);
+}
+
+void MainWindow::onMicStalled()
+{
+    /* Keyed for kStallMs and not one frame left: the capture stream is up as
+     * far as the audio system is concerned and delivers nothing. 0.1.13 sat in
+     * exactly this state showing TRANSMITTING until the operator restarted.
+     *
+     * Un-key, so the display, the reflector and the operator agree nothing is
+     * on the air; then reopen the input device, which is what the restart
+     * cured — the same call Preferences makes, and safe outside app_service().
+     * Copy the name first: app_set_input_device() writes it back into the very
+     * buffer it would otherwise be reading from. */
+    log_err("TX: keyed for %lld ms and nothing was sent — the microphone delivers no "
+            "audio; un-keying and reopening the input device",
+            static_cast<long long>(m_txHealth.silentForMs()));
+
+    releaseMouseHold("the microphone delivered no audio");
+    m_pttManager->forceUnkey("the microphone delivered no audio");
+
+    const QByteArray device(app_config(m_app)->input_device);
+    app_set_input_device(m_app, device.constData());
+
+    m_audioBanner->setText(tr("Nothing was transmitted: the microphone stopped delivering "
+                              "audio. SVXConnect un-keyed and reopened it — try again, and "
+                              "check the input device in Preferences if this repeats."));
+    m_audioBanner->show();
+}
+
+void MainWindow::onPlaybackStalled()
+{
+    /* The jitter buffer has sat full for seconds: the playback callback is not
+     * draining it, so nothing you receive reaches the speaker. Reopening the
+     * output tears down the whole audio context (1-2 s) and closes the
+     * microphone with it, so never in the middle of an over. */
+    if (app_tx_active(m_app)) {
+        log_warn("audio: the speaker stopped playing; will reopen it after this over");
+        return;
+    }
+
+    log_err("audio: the output device stopped playing (%u ms buffered and not "
+            "draining); reopening it", app_jitter_ms(m_app));
+
+    const QByteArray device(app_config(m_app)->output_device);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    app_set_output_device(m_app, device.constData());
+    QApplication::restoreOverrideCursor();
+
+    m_audioBanner->setText(tr("The speaker stopped playing what the reflector sends. "
+                              "SVXConnect reopened the output device; check it in "
+                              "Preferences if this repeats."));
+    m_audioBanner->show();
 }
 
 void MainWindow::refreshBanner()
@@ -895,16 +1004,46 @@ void MainWindow::refreshBanner()
 
 void MainWindow::refreshPttButton()
 {
-    const bool tx = m_app && app_tx_active(m_app);
-    if (m_txInit && tx == m_lastTxActive)
+    const TxMonitor::State st = m_txHealth.state();
+    if (m_txInit && st == m_shownTx)
         return;
     m_txInit = true;
-    m_lastTxActive = tx;
+    m_shownTx = st;
 
-    /* The theme's red, solid, with the background as text — it must read as
-     * "on the air" at a glance, including on an unfocused window. */
-    Theme::setProp(m_ptt, "tx", tx);
-    m_ptt->setText(tx ? tr("TRANSMITTING") : tr("PUSH TO TALK"));
+    /* TRANSMITTING only while audio is leaving — never merely because the
+     * transmitter is keyed. The theme's red, solid, with the background as
+     * text: it must read as "on the air" at a glance, including on an
+     * unfocused window. A keyed transmitter sending nothing gets the warning
+     * colour and says so. */
+    switch (st) {
+    case TxMonitor::State::Idle:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("false"));
+        m_ptt->setText(tr("PUSH TO TALK"));
+        break;
+    case TxMonitor::State::Keying:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("keying"));
+        m_ptt->setText(tr("KEYING…"));
+        break;
+    case TxMonitor::State::OnAir:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("true"));
+        m_ptt->setText(tr("TRANSMITTING"));
+        break;
+    case TxMonitor::State::NoAudio:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("noaudio"));
+        m_ptt->setText(tr("NOT TRANSMITTING — NO MICROPHONE AUDIO"));
+        break;
+    }
+}
+
+void MainWindow::requestPttHint()
+{
+    /* Draw what is known now, and again when Hyprland has answered. hyprctl
+     * used to be run and WAITED for here, up to 3 s on every window
+     * activation — on the thread that runs the core, so a slow Hyprland
+     * socket overflowed the 1 s microphone ring mid-over. */
+    refreshPttHint();
+    if (HyprlandBinding::isHyprland())
+        HyprlandBinding::refreshBoundKeys(this, [this](const QString &) { refreshPttHint(); });
 }
 
 void MainWindow::refreshPttHint()
@@ -913,7 +1052,7 @@ void MainWindow::refreshPttHint()
     const char *tone = "";
 
     if (HyprlandBinding::isHyprland()) {
-        const QString keys = HyprlandBinding::boundKeys();
+        const QString keys = HyprlandBinding::cachedBoundKeys();
         if (!keys.isEmpty()) {
             text = tr("global  %1").arg(keys);
         } else {
@@ -952,12 +1091,12 @@ void MainWindow::refreshLog()
 
 void MainWindow::onPttPressed()
 {
-    if (m_app) app_ptt(m_app, CTL_ON);
+    CoreAction::ptt(m_app, CTL_ON);
 }
 
 void MainWindow::onPttReleased()
 {
-    if (m_app) app_ptt(m_app, CTL_OFF);
+    CoreAction::ptt(m_app, CTL_OFF);
 }
 
 void MainWindow::setConfigPath(const QString &path)
@@ -1072,7 +1211,7 @@ void MainWindow::onRestartRequested()
     /* Never restart with the transmitter keyed. Drop the carrier first,
      * explicitly, so the reflector sees a clean end of transmission. */
     if (m_app && app_tx_active(m_app)) {
-        app_ptt(m_app, CTL_OFF);
+        CoreAction::ptt(m_app, CTL_OFF);
         log_info("unkeyed before restarting");
     }
 
@@ -1112,7 +1251,7 @@ void MainWindow::onPreferences()
     });
     connect(&dlg, &PreferencesDialog::pttBindingChanged, this, [this]() {
         applyPttBindings();
-        refreshPttHint();
+        requestPttHint();
     });
     connect(&dlg, &PreferencesDialog::talkgroupsChanged, this, [this]() {
         /* The buttons are rebuilt from the LIVE config, which the dialog did
@@ -1138,7 +1277,7 @@ void MainWindow::onPreferences()
         m_portal->setNetworkEnabled(ReflectorFeed::enabledSetting());
     if (m_map)
         m_map->setHomeRadiusKm(QSettings().value(QStringLiteral("map/homeRadiusKm"), 100).toInt());
-    refreshPttHint();
+    requestPttHint();
 }
 
 void MainWindow::applyPttBindings()

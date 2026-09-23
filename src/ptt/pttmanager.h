@@ -38,23 +38,34 @@ public:
     enum class Mode { Hold, Toggle };
 
     explicit PttManager(svx_app *app, QObject *parent = nullptr);
+
+    /* With the backends given instead of the portal. Takes ownership. For the
+     * tests, which drive the manager with a scripted backend and a stub core. */
+    PttManager(svx_app *app, const QVector<PttBackend *> &backends, QObject *parent = nullptr);
     ~PttManager() override;
 
     /* Backends in preference order, for the settings table. Owned by this. */
     QVector<PttBackend *> backends() const { return m_backends; }
     PttBackend *backend(const QString &id) const;
 
-    void setMode(Mode m) { m_mode = m; }
+    /* Switching mode while keyed un-keys: a press made under Hold is waiting
+     * for a release that Toggle would ignore. */
+    void setMode(Mode m);
     Mode mode() const    { return m_mode; }
 
     /* Start the keyboard binding. An invalid binding stops the backend rather
-     * than erroring. */
+     * than erroring. Stopping or restarting the backend un-keys first: a
+     * session that is torn down never delivers the release it owes. */
     void applyKeyboardBinding(const PttBinding &b);
 
     /* Unkey now, whatever the reason. Safe to call when not transmitting. */
     void forceUnkey(const char *why);
 
-    bool isKeyed() const { return m_holders > 0 || m_latched; }
+    /* The CORE's answer, not ours. The transmitter can be keyed by Space, the
+     * mouse, the tray or the control FIFO, and un-keyed by the core itself —
+     * transmit timeout, a dropped link, a talkgroup change — none of which
+     * passes through here. */
+    bool isKeyed() const { return m_app && app_tx_active(m_app) != 0; }
 
 signals:
     /* A backend can no longer guarantee a release; the UI should say so. */
@@ -70,10 +81,18 @@ private:
     QVector<PttBackend *>  m_backends;
     Mode                   m_mode = Mode::Hold;
 
-    /* How many backends are currently holding the key down. Reference counted
-     * so a foot switch released while the hotkey is still held does not unkey. */
+    /* How many backends are currently holding the key down, in Hold mode.
+     * Reference counted so a foot switch released while the hotkey is still
+     * held does not unkey.
+     *
+     * There is deliberately no Toggle-mode equivalent. 0.1.13 kept its own
+     * "latched" flag and sent ON or OFF from it; the core then ended an over by
+     * itself ("the connection dropped", 19:50:30 in the field log) and the flag
+     * still said keyed five seconds later, so the next press sent OFF to an
+     * idle transmitter and did nothing. The reverse — keyed with Space, then
+     * the global key sends ON — left the transmitter on. Toggle now asks the
+     * core. */
     int  m_holders = 0;
-    bool m_latched = false;   /* Toggle mode's own state */
 };
 
 #endif

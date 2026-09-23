@@ -35,15 +35,25 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# Nothing of the user's may be read or written, and the XDG variables are not
+# enough for that: the core derives pki_dir from $HOME, not from
+# XDG_CONFIG_HOME, so 0.1.13's smoke test went looking in the real
+# ~/.config/svxconnect/pki. HOME is sandboxed too, pki_dir is named outright,
+# and the log is checked for the real home directory below.
+REAL_HOME="${HOME:-}"
+mkdir -p "$WORK/home"
+
 cat > "$WORK/svxconnect.conf" <<CONF
 callsign = ON0TEST
 reflector = reflector.invalid
 port = 5300
 monitored = 8, 9
 switchable = 8
+pki_dir = $WORK/pki
 CONF
 
 rc=0
+HOME="$WORK/home" \
 XDG_CONFIG_HOME="$WORK/config" \
 XDG_STATE_HOME="$WORK/state" \
 XDG_CACHE_HOME="$WORK/cache" \
@@ -76,6 +86,13 @@ fi
 # enhanced reflector. "It did not crash" passed; this would not have.
 if ! grep -q "reflector feed: probing wss://reflector.invalid/" "$WORK/log"; then
     echo "smoketest: started, but never probed for the reflector's portal feed" >&2
+    exit 1
+fi
+# $WORK itself may live under the real home, when TMPDIR does.
+if [ -n "$REAL_HOME" ] \
+   && grep -F "$REAL_HOME/" "$WORK/log" | grep -qvF "$WORK/"; then
+    echo "smoketest: the application looked in the real home directory ($REAL_HOME):" >&2
+    grep -F "$REAL_HOME/" "$WORK/log" | grep -vF "$WORK/" >&2
     exit 1
 fi
 if grep -q "internal:" "$WORK/log"; then

@@ -100,6 +100,12 @@ public:
     void setEnabled(bool on);
     bool isEnabled() const { return m_enabled; }
 
+    /* Connect to this URL instead of the one derived from a reflector host,
+     * and shorten the timers. For the tests, which serve a feed on 127.0.0.1
+     * without TLS and cannot wait 45 s. */
+    void openUrl(const QUrl &url);
+    void setIntervals(int reconnectMs, int pingMs, int silenceMs);
+
     bool                      isAvailable() const { return m_available; }
     const QHash<QString, Node> &nodes()    const { return m_nodes; }
     const QVector<Session>     &sessions() const { return m_sessions; }
@@ -133,6 +139,7 @@ signals:
 
 private:
     void connectNow();
+    void onMessage(const QByteArray &data);
     void teardown();
     void markUnavailable();
     void scheduleReconnect();
@@ -150,6 +157,8 @@ private:
     QWebSocket *m_socket    = nullptr;
     QTimer     *m_snapshot  = nullptr;   /* 5 s: is this an enhanced reflector? */
     QTimer     *m_reconnect = nullptr;   /* 15 s, flat                          */
+    QTimer     *m_ping      = nullptr;   /* 30 s, while a snapshot is in hand   */
+    QTimer     *m_silence   = nullptr;   /* 45 s without a message or a pong    */
 
     QString m_host;
     QUrl    m_url;

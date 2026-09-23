@@ -19,7 +19,9 @@ namespace {
 
 constexpr char kTgKey[]      = "portal/talkgroups";
 constexpr char kCallKey[]    = "portal/callsigns";
-constexpr char kHostKey[]    = "portal/host";
+constexpr char kHostKey[]    = "portal/host";      /* the host `fetched` is for */
+constexpr char kTgHostKey[]  = "portal/talkgroupsHost";
+constexpr char kCallHostKey[] = "portal/callsignsHost";
 constexpr char kFetchedKey[] = "portal/fetched";
 constexpr char kAutoKey[]    = "portal/autoUpdate";
 
@@ -102,9 +104,11 @@ bool PortalInfo::setManualJson(const QByteArray &talkgroups, const QByteArray &c
     /* Stored against the current reflector, like a fetched document: a list of
      * Belgian talkgroup names is wrong, not stale, on another network. */
     QSettings s;
-    s.setValue(QLatin1String(kHostKey), m_base.host());
-    s.setValue(QLatin1String(kTgKey),   m_rawTalkgroups);
-    s.setValue(QLatin1String(kCallKey), m_rawCallsigns);
+    s.setValue(QLatin1String(kHostKey),     m_base.host());
+    s.setValue(QLatin1String(kTgKey),       m_rawTalkgroups);
+    s.setValue(QLatin1String(kTgHostKey),   m_base.host());
+    s.setValue(QLatin1String(kCallKey),     m_rawCallsigns);
+    s.setValue(QLatin1String(kCallHostKey), m_base.host());
 
     emit changed();
     return true;
@@ -188,6 +192,14 @@ void PortalInfo::setReflector(const QString &host)
         refresh();
 }
 
+void PortalInfo::setPortalUrl(const QUrl &base)
+{
+    m_host = base.host();
+    m_base = base;
+    load();
+    emit changed();
+}
+
 void PortalInfo::load()
 {
     m_talkgroups.clear();
@@ -195,14 +207,25 @@ void PortalInfo::load()
     m_rawTalkgroups.clear();
     m_rawCallsigns.clear();
 
+    /* Each document carries the host it came from. One shared host key let a
+     * half-finished fetch for a new reflector file its callsigns next to the
+     * old reflector's talkgroup names, and load() then served both as the new
+     * one's. Settings written before the per-document keys fall back to the
+     * shared one. */
     QSettings s;
-    if (s.value(QLatin1String(kHostKey)).toString() != m_base.host())
-        return;
+    const QString legacy = s.value(QLatin1String(kHostKey)).toString();
+    auto hostOf = [&s, &legacy](const char *key) {
+        return s.contains(QLatin1String(key)) ? s.value(QLatin1String(key)).toString() : legacy;
+    };
 
-    m_rawTalkgroups = s.value(QLatin1String(kTgKey)).toByteArray();
-    m_rawCallsigns  = s.value(QLatin1String(kCallKey)).toByteArray();
-    m_talkgroups    = parseTalkgroups(m_rawTalkgroups);
-    m_callsigns     = parseCallsigns(m_rawCallsigns);
+    if (hostOf(kTgHostKey) == m_base.host()) {
+        m_rawTalkgroups = s.value(QLatin1String(kTgKey)).toByteArray();
+        m_talkgroups    = parseTalkgroups(m_rawTalkgroups);
+    }
+    if (hostOf(kCallHostKey) == m_base.host()) {
+        m_rawCallsigns = s.value(QLatin1String(kCallKey)).toByteArray();
+        m_callsigns    = parseCallsigns(m_rawCallsigns);
+    }
 }
 
 void PortalInfo::refresh()
@@ -210,8 +233,31 @@ void PortalInfo::refresh()
     if (!m_base.isValid())
         return;
     m_lastError.clear();
+
+    /* A round is the two files together. The cache is only stamped fresh once
+     * both have answered and the talkgroup names — the half that matters —
+     * came through; stamping on the first success meant a failed
+     * talkgroups.json next to a working callsigns.json was not retried for a
+     * day. */
+    ++m_round;
+    m_roundLeft = 2;
+    m_roundTgOk = false;
     fetch(QStringLiteral("talkgroups.json"));
     fetch(QStringLiteral("callsigns.json"));
+}
+
+void PortalInfo::fileDone(quint64 round, bool isTalkgroups, bool ok)
+{
+    if (round != m_round)
+        return;               /* a reply to a round that was superseded */
+    if (isTalkgroups && ok)
+        m_roundTgOk = true;
+    if (--m_roundLeft > 0 || !m_roundTgOk)
+        return;
+
+    QSettings s;
+    s.setValue(QLatin1String(kHostKey), m_base.host());
+    s.setValue(QLatin1String(kFetchedKey), QDateTime::currentSecsSinceEpoch());
 }
 
 void PortalInfo::fetch(const QString &file)
@@ -228,9 +274,12 @@ void PortalInfo::fetch(const QString &file)
     emit statusChanged();
 
     const QString askedHost = m_base.host();
+    const quint64 round = m_round;
+    const bool isTalkgroups = file.startsWith(QLatin1String("talkgroups"));
 
     QNetworkReply *reply = m_net->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, file, askedHost]() {
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, file, askedHost, round, isTalkgroups]() {
         reply->deleteLater();
         --m_pending;
 
@@ -250,37 +299,41 @@ void PortalInfo::fetch(const QString &file)
             m_lastError = status ? tr("HTTP %1 for %2").arg(status).arg(file)
                                  : tr("%1: %2").arg(file, reply->errorString());
             log_info("portal: %s unavailable (%s)", qPrintable(file), qPrintable(m_lastError));
+            fileDone(round, isTalkgroups, false);
             emit statusChanged();
             return;
         }
 
         const QByteArray body = reply->readAll();
         QSettings s;
-        s.setValue(QLatin1String(kHostKey), m_base.host());
-        s.setValue(QLatin1String(kFetchedKey), QDateTime::currentSecsSinceEpoch());
 
-        if (file.startsWith(QLatin1String("talkgroups"))) {
+        if (isTalkgroups) {
             const QHash<quint32, QString> parsed = parseTalkgroups(body);
             if (parsed.isEmpty()) {
                 m_lastError = tr("%1 held no talkgroup names").arg(file);
+                fileDone(round, true, false);
                 emit statusChanged();
                 return;
             }
             m_talkgroups    = parsed;
             m_rawTalkgroups = body;
             s.setValue(QLatin1String(kTgKey), body);
+            s.setValue(QLatin1String(kTgHostKey), askedHost);
             log_info("portal: %d talkgroup names", int(parsed.size()));
         } else {
             const QHash<QString, QString> parsed = parseCallsigns(body);
             if (parsed.isEmpty()) {
-                emit statusChanged();   /* an empty callsign list is not an error */
+                fileDone(round, false, true);   /* an empty callsign list is not an error */
+                emit statusChanged();
                 return;
             }
             m_callsigns    = parsed;
             m_rawCallsigns = body;
             s.setValue(QLatin1String(kCallKey), body);
+            s.setValue(QLatin1String(kCallHostKey), askedHost);
             log_info("portal: %d station descriptions", int(parsed.size()));
         }
+        fileDone(round, isTalkgroups, true);
         emit changed();
         emit statusChanged();
     });

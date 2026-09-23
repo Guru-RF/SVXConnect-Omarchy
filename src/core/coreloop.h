@@ -34,6 +34,12 @@
  * 3. QSocketNotifier IS LEVEL-TRIGGERED AND MUST NEVER BE LEFT ENABLED ON A
  *    CLOSED FD, or the event loop spins at 100% on POLLNVAL.
  *
+ *    Inside a service pass that is guaranteed: every notifier is silenced
+ *    before app_service() and only the wanted set re-enabled after it. Between
+ *    passes the interface can still close sockets — Disconnect, Reconnect, a
+ *    PTT press while not connected — so those calls go through CoreAction,
+ *    which brackets them the same way. See core/coreaction.h.
+ *
  * ON NOT DESTROYING NOTIFIERS
  * ---------------------------
  * The obvious implementation rebuilds the notifier set whenever the fd set
@@ -79,6 +85,10 @@ public:
     /* Service once immediately and arm the loop. Call once, after app_start(). */
     void kick();
 
+    /* How long an fd must go unwanted before its notifiers are deleted.
+     * Five minutes; the tests shorten it. */
+    void setPruneAfterMs(qint64 ms) { m_pruneAfterMs = ms; }
+
 signals:
     /* Coalesced "something changed, consider repainting". Always delivered
      * queued, never from inside a service pass — see serviceOnce(). This is
@@ -98,8 +108,12 @@ private:
     struct FdEntry {
         QSocketNotifier *read  = nullptr;
         QSocketNotifier *write = nullptr;
-        int              absentPasses = 0;
+        qint64           lastWantedMs = 0;   /* now_ms() of the last reconcile that asked */
     };
+
+    /* CoreAction's guard: before and after an interface call into the core. */
+    void silenceNotifiers();
+    void afterAction();
 
     void reconcile();
     void armTimer();
@@ -114,6 +128,7 @@ private:
     QTimer               m_timer;
     QTimer               m_prune;
     QHash<int, FdEntry>  m_fds;
+    qint64               m_pruneAfterMs;
 
     bool    m_dirty     = false;   /* set by the observer, on this thread */
     bool    m_inService = false;   /* re-entrancy guard */

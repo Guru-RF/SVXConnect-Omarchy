@@ -4,6 +4,7 @@
  * See coreloop.h for the design and the three failure modes it avoids.
  */
 #include "core/coreloop.h"
+#include "core/coreaction.h"
 
 #include <QSocketNotifier>
 #include <QElapsedTimer>
@@ -23,11 +24,13 @@ constexpr int kMaxFds = 16;
 /* Never sleep forever, even if the core ever returns something odd. */
 constexpr int kMaxTimeoutMs = 1000;
 
-/* Prune an fd entry after this many consecutive reconciles without it. At the
- * core's cadence that is minutes, which is the point: fd numbers are recycled
- * quickly, so an entry that has genuinely gone away is rare and pruning it
- * eagerly buys nothing. */
-constexpr int kPruneAfterPasses = 600;
+/* Prune an fd entry once the core has not asked for it for this long. Measured
+ * in time, not in passes: the core services every 5 ms while transmitting and
+ * every 20 ms while idle, so a pass count means 3 s on one and 12 s on the
+ * other — never the "minutes" it was meant to be. Minutes is the point: fd
+ * numbers are recycled quickly, so an entry that has genuinely gone away is
+ * rare and pruning it eagerly buys nothing. */
+constexpr qint64 kPruneAfterMs = 5 * 60 * 1000;
 
 /* Spin guard: more than this many service passes inside the window means
  * something is level-triggering without being drained. During transmit the
@@ -51,7 +54,7 @@ void CoreLoop::observerTrampoline(void *user)
 }
 
 CoreLoop::CoreLoop(svx_app *app, QObject *parent)
-    : QObject(parent), m_app(app)
+    : QObject(parent), m_app(app), m_pruneAfterMs(kPruneAfterMs)
 {
     m_timer.setSingleShot(true);
     /* The 5-20 ms transmit cadence must not be coalesced with other timers.
@@ -66,6 +69,11 @@ CoreLoop::CoreLoop(svx_app *app, QObject *parent)
     m_prune.start();
 
     app_set_observer(m_app, &CoreLoop::observerTrampoline, this);
+
+    /* Every interface call that can close a socket goes through CoreAction;
+     * see coreaction.h for the window this closes. */
+    CoreAction::setGuard([this]() { silenceNotifiers(); },
+                         [this]() { afterAction(); });
 }
 
 CoreLoop::~CoreLoop()
@@ -75,6 +83,7 @@ CoreLoop::~CoreLoop()
      * half-destroyed object. */
     if (m_app)
         app_set_observer(m_app, nullptr, nullptr);
+    CoreAction::setGuard({}, {});
 
     m_timer.stop();
     m_prune.stop();
@@ -89,6 +98,29 @@ CoreLoop::~CoreLoop()
 void CoreLoop::kick()
 {
     serviceOnce();
+}
+
+void CoreLoop::silenceNotifiers()
+{
+    for (auto &e : m_fds) {
+        if (e.read)  e.read->setEnabled(false);
+        if (e.write) e.write->setEnabled(false);
+    }
+}
+
+void CoreLoop::afterAction()
+{
+    /* Inside a service pass the pass itself reconciles on the way out. */
+    if (m_inService)
+        return;
+
+    /* The call may have closed descriptors and started a connect worker with a
+     * new wake pipe; watch exactly what the core now wants, straight away,
+     * rather than leaving everything silenced until the timer fires. And re-arm
+     * the timer: a PTT press wants the 5 ms transmit cadence now, not after
+     * the idle 20 ms. */
+    reconcile();
+    armTimer();
 }
 
 void CoreLoop::serviceOnce()
@@ -112,10 +144,7 @@ void CoreLoop::serviceOnce()
          *     app_service() can close and reopen sockets; a notifier left
          *     enabled on a closed fd spins on POLLNVAL. reconcile() re-enables
          *     exactly the set the core now wants. */
-        for (auto &e : m_fds) {
-            if (e.read)  e.read->setEnabled(false);
-            if (e.write) e.write->setEnabled(false);
-        }
+        silenceNotifiers();
         m_timer.stop();
 
         /* (2) UNCONDITIONAL. This is the whole contract. It drains the control
@@ -166,12 +195,10 @@ void CoreLoop::reconcile()
     if (n < 0)
         n = 0;
 
-    /* Mark everything absent, then un-mark what the core asked for. Driving
-     * setEnabled() from the computed desired set — rather than "re-enable
-     * everything I still hold" — is what keeps this correct now that entries
-     * outlive their membership of the set. */
-    for (auto &e : m_fds)
-        e.absentPasses++;
+    /* Driving setEnabled() from the computed desired set — rather than
+     * "re-enable everything I still hold" — is what keeps this correct now
+     * that entries outlive their membership of the set. */
+    const qint64 now = qint64(now_ms());
 
     for (int i = 0; i < n; ++i) {
         const int fd = want[i].fd;
@@ -179,7 +206,7 @@ void CoreLoop::reconcile()
             continue;
 
         FdEntry &e = m_fds[fd];   /* default-constructs on first sight */
-        e.absentPasses = 0;
+        e.lastWantedMs = now;
 
         /* The Read notifier is created UNCONDITIONALLY, even for an fd the
          * core asked to watch only for POLLOUT.
@@ -279,8 +306,9 @@ void CoreLoop::pruneStaleNotifiers()
     if (m_inService)
         return;
 
+    const qint64 now = qint64(now_ms());
     for (auto it = m_fds.begin(); it != m_fds.end(); ) {
-        if (it->absentPasses > kPruneAfterPasses) {
+        if (now - it->lastWantedMs > m_pruneAfterMs) {
             delete it->read;
             delete it->write;
             it = m_fds.erase(it);

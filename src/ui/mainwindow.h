@@ -33,6 +33,7 @@
 #include <QMainWindow>
 
 #include "core/svxcore.h"
+#include "core/audiohealth.h"
 #include "net/qrzlookup.h"
 
 #include <QHash>
@@ -111,6 +112,12 @@ protected:
     /* Re-reads the Hyprland binding when the window is activated, which is
      * when a user who has just edited bindings.lua comes back to look. */
     bool event(QEvent *event) override;
+    /* A mouse hold on the PTT button whose release the window may never see:
+     * losing activation (a workspace switch, the lock screen) or being hidden
+     * breaks the pointer grab, and QAbstractButton does not synthesise a
+     * release for either. Both un-key. */
+    void changeEvent(QEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private slots:
     void tickModel();     /* 100 ms */
@@ -118,6 +125,7 @@ private slots:
 
     void onPttPressed();
     void onPttReleased();
+    void releaseMouseHold(const char *why);
 
     void onPreferences();
     void onEditConfig();
@@ -130,7 +138,15 @@ private:
     void refreshBanner();
     void refreshLog();
     void refreshPttButton();
-    void refreshPttHint();
+
+    /* Is audio actually moving? Sampled on both ticks from the core's packet
+     * counter and jitter depth — see core/audiohealth.h — and acted on from
+     * the model tick when it is not. */
+    void sampleAudioHealth();
+    void onMicStalled();
+    void onPlaybackStalled();
+    void refreshPttHint();    /* from what is known; never waits */
+    void requestPttHint();    /* ...and again once Hyprland has answered */
     void watchConfig();
 
     /* The map pane.
@@ -174,6 +190,7 @@ private:
     QTimer         *m_mapTick   = nullptr;   /* 500 ms while the map is up   */
     QLabel         *m_banner    = nullptr;   /* the core's banner          */
     QLabel         *m_pttBanner = nullptr;   /* a lost push-to-talk control */
+    QLabel         *m_audioBanner = nullptr; /* a device that stopped delivering */
     QWidget        *m_reload    = nullptr;
     QPushButton    *m_ptt       = nullptr;
     QLabel         *m_pttHint   = nullptr;
@@ -204,8 +221,11 @@ private:
     QHash<QString, QrzLookup::Record> m_qrzSeen;
     QString m_stationOpen;   /* the callsign whose card is open, if any */
 
+    TxMonitor       m_txHealth;
+    PlaybackMonitor m_playHealth;
+
     quint64 m_lastLogSerial = 0;
-    bool    m_lastTxActive  = false;
+    TxMonitor::State m_shownTx = TxMonitor::State::Idle;
     bool    m_txInit        = false;
 };
 

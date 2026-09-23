@@ -6,12 +6,14 @@
 #include "core/svxcore.h"
 
 #include <QDBusConnection>
-#include <QDBusInterface>
 #include <QDBusMessage>
 #include <QDBusReply>
 #include <QDBusMetaType>
 #include <QDBusArgument>
 #include <QDBusObjectPath>
+#include <QDBusServiceWatcher>
+#include <QDBusPendingCall>
+#include <QDBusPendingCallWatcher>
 #include <QFile>
 #include <QStandardPaths>
 #include <QUuid>
@@ -40,6 +42,7 @@ const char *kPath     = "/org/freedesktop/portal/desktop";
 const char *kIface    = "org.freedesktop.portal.GlobalShortcuts";
 const char *kRequest  = "org.freedesktop.portal.Request";
 const char *kRegistry = "org.freedesktop.host.portal.Registry";
+const char *kSession  = "org.freedesktop.portal.Session";
 
 /* Must equal the basename of an installed .desktop file, or Register fails
  * with "Could not register app ID: App info not found".
@@ -51,6 +54,11 @@ const char *kRegistry = "org.freedesktop.host.portal.Registry";
 const char *kAppId = "SVXConnect";
 
 const char *kShortcutId = "ptt";
+
+/* How long any portal call may take before it is given up on. Only bounds
+ * how long a reply is waited FOR: nothing blocks while it is. */
+constexpr int kCallTimeoutMs = 10000;
+constexpr int kProbeTimeoutMs = 500;
 
 /* A DEDICATED connection, not QDBusConnection::sessionBus(): Registry.Register
  * must be the first portal call made on its connection, and Qt talks to
@@ -107,11 +115,16 @@ PttAvailability PortalBackend::probe() const
         return a;
     }
 
-    QDBusInterface props(QLatin1String(kService), QLatin1String(kPath),
-                         QStringLiteral("org.freedesktop.DBus.Properties"), bus);
-    const QDBusReply<QVariant> v = props.call(QStringLiteral("Get"),
-                                              QLatin1String(kIface),
-                                              QStringLiteral("version"));
+    /* The one synchronous portal call left: probe() is a question the settings
+     * page asks and must answer on the spot. A plain message rather than a
+     * QDBusInterface (which would introspect first, a second blocking round
+     * trip), with a short timeout rather than QtDBus's 25 s, so a hung portal
+     * costs the opening of Preferences half a second, not the audio. */
+    QDBusMessage get = QDBusMessage::createMethodCall(
+        QLatin1String(kService), QLatin1String(kPath),
+        QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+    get << QLatin1String(kIface) << QStringLiteral("version");
+    const QDBusReply<QVariant> v = bus.call(get, QDBus::Block, kProbeTimeoutMs);
     if (!v.isValid()) {
         a.state  = PttAvailability::Unavailable;
         a.reason = tr("No global-shortcuts portal is running.");
@@ -151,7 +164,9 @@ bool PortalBackend::hasDesktopFile()
 
 QString PortalBackend::activeTrigger() const
 {
-    return m_hyprland ? HyprlandBinding::boundKeys() : m_active;
+    /* The cached answer: this is called from PttManager's log line and from
+     * the window, and must never spawn hyprctl and wait for it. */
+    return m_hyprland ? HyprlandBinding::cachedBoundKeys() : m_active;
 }
 
 bool PortalBackend::isActive() const
@@ -178,18 +193,60 @@ bool PortalBackend::start(const PttBinding &binding)
     }
     m_conn = true;
 
+    /* Watch the portal itself. A portal that exits or restarts while the key
+     * is held never sends the Deactivated, and nothing else would notice. */
+    if (!m_watcher) {
+        m_watcher = new QDBusServiceWatcher(QLatin1String(kService), bus,
+                                            QDBusServiceWatcher::WatchForOwnerChange, this);
+        connect(m_watcher, &QDBusServiceWatcher::serviceUnregistered,
+                this, &PortalBackend::onPortalVanished);
+        connect(m_watcher, &QDBusServiceWatcher::serviceRegistered,
+                this, &PortalBackend::onPortalAppeared);
+    }
+
     /* Registry.Register FIRST, at most once per connection, and never under
-     * Flatpak, where the portal already knows the app id. */
+     * Flatpak, where the portal already knows the app id.
+     *
+     * Every portal call here is ASYNCHRONOUS. They used to block — and a
+     * QDBusInterface blocks twice, introspecting in its constructor before the
+     * call itself — for up to QtDBus's 25 s default, on the GUI thread that
+     * also runs the core. A portal that is slow to start at login, or hung,
+     * froze audio and heartbeats for that long. "First" is kept by chaining:
+     * CreateSession is only sent once Register has answered. */
+    const quint64 gen = m_generation;
     if (!m_registered && !QFile::exists(QStringLiteral("/.flatpak-info"))) {
         m_registered = true;
-        QDBusInterface reg(QLatin1String(kService), QLatin1String(kPath),
-                           QLatin1String(kRegistry), bus);
-        const QDBusMessage r = reg.call(QStringLiteral("Register"),
-                                        QLatin1String(kAppId), QVariantMap{});
-        if (r.type() == QDBusMessage::ErrorMessage)
-            log_warn("ptt: Registry.Register failed: %s",
-                     qPrintable(r.errorMessage()));
+        QDBusMessage reg = QDBusMessage::createMethodCall(
+            QLatin1String(kService), QLatin1String(kPath), QLatin1String(kRegistry),
+            QStringLiteral("Register"));
+        reg << QLatin1String(kAppId) << QVariantMap{};
+        whenAnswered(bus.asyncCall(reg, kCallTimeoutMs), [this, gen](const QDBusMessage &r) {
+            if (r.type() == QDBusMessage::ErrorMessage)
+                log_warn("ptt: Registry.Register failed: %s", qPrintable(r.errorMessage()));
+            if (gen == m_generation)
+                createSession();
+        });
+        return true;
     }
+
+    createSession();
+    return true;
+}
+
+void PortalBackend::whenAnswered(const QDBusPendingCall &call,
+                                 std::function<void(const QDBusMessage &)> then)
+{
+    auto *w = new QDBusPendingCallWatcher(call, this);
+    connect(w, &QDBusPendingCallWatcher::finished, this,
+            [then = std::move(then)](QDBusPendingCallWatcher *w) {
+                w->deleteLater();
+                then(w->reply());
+            });
+}
+
+void PortalBackend::createSession()
+{
+    QDBusConnection bus = QDBusConnection(QLatin1String(kConnName));
 
     /* Subscribe BEFORE calling, or the reply can arrive first. */
     const QString sessionToken = freshToken("svxs");
@@ -199,20 +256,19 @@ bool PortalBackend::start(const PttBinding &binding)
                 QStringLiteral("Response"),
                 this, SLOT(onCreateSessionResponse(uint, QVariantMap)));
 
-    QDBusInterface gs(QLatin1String(kService), QLatin1String(kPath),
-                      QLatin1String(kIface), bus);
-
     QVariantMap opts;
     opts.insert(QStringLiteral("handle_token"), sessionToken);
     opts.insert(QStringLiteral("session_handle_token"), freshToken("svxsess"));
 
-    const QDBusMessage reply = gs.call(QStringLiteral("CreateSession"), opts);
-    if (reply.type() == QDBusMessage::ErrorMessage) {
-        log_err("ptt: CreateSession failed: %s", qPrintable(reply.errorMessage()));
-        return false;
-    }
+    QDBusMessage call = QDBusMessage::createMethodCall(
+        QLatin1String(kService), QLatin1String(kPath), QLatin1String(kIface),
+        QStringLiteral("CreateSession"));
+    call << opts;
 
-    return true;
+    whenAnswered(bus.asyncCall(call, kCallTimeoutMs), [](const QDBusMessage &r) {
+        if (r.type() == QDBusMessage::ErrorMessage)
+            log_err("ptt: CreateSession failed: %s", qPrintable(r.errorMessage()));
+    });
 }
 
 void PortalBackend::onCreateSessionResponse(uint code, const QVariantMap &results)
@@ -236,6 +292,12 @@ void PortalBackend::onCreateSessionResponse(uint code, const QVariantMap &result
     }
 
     log_info("ptt: portal session %s", qPrintable(m_session));
+
+    /* Per session path, so a Closed for an old session cannot be mistaken for
+     * this one. Removed again in stop(). */
+    QDBusConnection(QLatin1String(kConnName)).connect(
+        QLatin1String(kService), m_session, QLatin1String(kSession), QStringLiteral("Closed"),
+        this, SLOT(onSessionClosed(QVariantMap)));
 
     subscribeSignals();
 
@@ -307,12 +369,14 @@ void PortalBackend::listShortcuts()
         QStringLiteral("ListShortcuts"));
     call << QVariant::fromValue(QDBusObjectPath(m_session)) << opts;
 
-    const QDBusMessage reply = bus.call(call);
-    if (reply.type() == QDBusMessage::ErrorMessage) {
+    const quint64 gen = m_generation;
+    whenAnswered(bus.asyncCall(call, kCallTimeoutMs), [this, gen](const QDBusMessage &r) {
+        if (r.type() != QDBusMessage::ErrorMessage || gen != m_generation)
+            return;
         log_warn("ptt: ListShortcuts failed (%s) — falling back to binding",
-                 qPrintable(reply.errorMessage()));
+                 qPrintable(r.errorMessage()));
         bindShortcut();
-    }
+    });
 }
 
 void PortalBackend::onListResponse(uint code, const QVariantMap &results)
@@ -365,9 +429,10 @@ void PortalBackend::bindShortcut()
          << QString()          /* parent_window */
          << opts;
 
-    const QDBusMessage reply = bus.call(call);
-    if (reply.type() == QDBusMessage::ErrorMessage)
-        log_err("ptt: BindShortcuts failed: %s", qPrintable(reply.errorMessage()));
+    whenAnswered(bus.asyncCall(call, kCallTimeoutMs), [](const QDBusMessage &r) {
+        if (r.type() == QDBusMessage::ErrorMessage)
+            log_err("ptt: BindShortcuts failed: %s", qPrintable(r.errorMessage()));
+    });
 }
 
 void PortalBackend::onBindResponse(uint code, const QVariantMap &results)
@@ -378,15 +443,17 @@ void PortalBackend::onBindResponse(uint code, const QVariantMap &results)
     }
 
     if (m_hyprland) {
-        /* The key is whatever bindings.lua says, not anything in this reply. */
-        const QString keys = HyprlandBinding::boundKeys();
-        if (keys.isEmpty())
-            log_info("ptt: registered %s; no key is bound to it in Hyprland yet",
-                     HyprlandBinding::kShortcutId);
-        else
-            log_info("ptt: registered %s, bound to %s",
-                     HyprlandBinding::kShortcutId, qPrintable(keys));
-        emit triggerChanged(keys);
+        /* The key is whatever bindings.lua says, not anything in this reply —
+         * asked in the background. */
+        HyprlandBinding::refreshBoundKeys(this, [this](const QString &keys) {
+            if (keys.isEmpty())
+                log_info("ptt: registered %s; no key is bound to it in Hyprland yet",
+                         HyprlandBinding::kShortcutId);
+            else
+                log_info("ptt: registered %s, bound to %s",
+                         HyprlandBinding::kShortcutId, qPrintable(keys));
+            emit triggerChanged(keys);
+        });
         return;
     }
 
@@ -446,6 +513,7 @@ void PortalBackend::onActivated(const QDBusObjectPath &session, const QString &s
      * talkgroup, no link, someone else talking) can be told apart from a key
      * that never arrived — a radio problem versus a binding problem. */
     log_info("ptt: key down");
+    m_down = true;
     emit pressed();
 }
 
@@ -457,6 +525,7 @@ void PortalBackend::onDeactivated(const QDBusObjectPath &session, const QString 
         return;
 
     log_info("ptt: key up");
+    m_down = false;
     emit released();
 }
 
@@ -476,12 +545,70 @@ void PortalBackend::onShortcutsChanged(const QDBusObjectPath &session, const Sho
     }
 }
 
-void PortalBackend::stop()
+void PortalBackend::sessionLost(const QString &why)
 {
     if (m_session.isEmpty())
         return;
 
+    QDBusConnection(QLatin1String(kConnName)).disconnect(
+        QLatin1String(kService), m_session, QLatin1String(kSession), QStringLiteral("Closed"),
+        this, SLOT(onSessionClosed(QVariantMap)));
+    m_session.clear();
+    m_active.clear();
+
+    if (m_down) {
+        m_down = false;
+        emit released();
+    }
+    emit lost(why);
+}
+
+void PortalBackend::onSessionClosed(const QVariantMap &)
+{
+    log_warn("ptt: the desktop closed the portal session %s", qPrintable(m_session));
+    sessionLost(tr("The desktop closed the global-shortcut session."));
+}
+
+void PortalBackend::onPortalVanished()
+{
+    if (m_session.isEmpty())
+        return;
+    log_warn("ptt: the desktop portal went away");
+    /* A new portal process knows nothing of us: register again next time. */
+    m_registered = false;
+    sessionLost(tr("The desktop portal stopped. Push-to-talk comes back by itself "
+                   "when the portal does."));
+}
+
+void PortalBackend::onPortalAppeared()
+{
+    /* Only after a loss: a session we still hold means this is the first
+     * registration of a portal we were already talking to. */
+    if (!m_session.isEmpty() || m_requested.isEmpty())
+        return;
+    log_info("ptt: the desktop portal is back; registering push-to-talk again");
+    start(PttBinding{m_requested});
+}
+
+void PortalBackend::stop()
+{
+    /* Answers to anything still in flight belong to the session being
+     * stopped; the generation check makes them fall on the floor. */
+    ++m_generation;
+
+    /* A held key's release will never arrive from a session we are closing.
+     * Release it here, so whoever owns the press never has to guess. */
+    if (m_down) {
+        m_down = false;
+        emit released();
+    }
+
+    if (m_session.isEmpty())
+        return;
+
     QDBusConnection bus = QDBusConnection(QLatin1String(kConnName));
+    bus.disconnect(QLatin1String(kService), m_session, QLatin1String(kSession),
+                   QStringLiteral("Closed"), this, SLOT(onSessionClosed(QVariantMap)));
     if (bus.isConnected()) {
         QDBusMessage close = QDBusMessage::createMethodCall(
             QLatin1String(kService), m_session,

@@ -3,13 +3,21 @@
  */
 #include "ptt/pttmanager.h"
 #include "ptt/portalbackend.h"
+#include "core/coreaction.h"
 
 PttManager::PttManager(svx_app *app, QObject *parent)
+    : PttManager(app, {new PortalBackend}, parent)
+{
+}
+
+PttManager::PttManager(svx_app *app, const QVector<PttBackend *> &backends, QObject *parent)
     : QObject(parent), m_app(app)
 {
-    auto *portal = new PortalBackend(this);
-    m_backends.append(portal);
-    wire(portal);
+    for (PttBackend *b : backends) {
+        b->setParent(this);
+        m_backends.append(b);
+        wire(b);
+    }
 }
 
 PttManager::~PttManager()
@@ -48,6 +56,18 @@ void PttManager::wire(PttBackend *b)
     });
 }
 
+void PttManager::setMode(Mode m)
+{
+    if (m == m_mode)
+        return;
+
+    /* Hold -> Toggle with the key down would ignore the release it is waiting
+     * for; Toggle -> Hold would wait for a release that is never coming. */
+    if (m_holders > 0 || isKeyed())
+        forceUnkey("the push-to-talk mode changed");
+    m_mode = m;
+}
+
 void PttManager::applyKeyboardBinding(const PttBinding &binding)
 {
     PttBackend *portal = backend(QStringLiteral("portal"));
@@ -55,6 +75,11 @@ void PttManager::applyKeyboardBinding(const PttBinding &binding)
         return;
 
     if (!binding.isValid()) {
+        /* stop() forgets the session, so a Deactivated still in flight for it
+         * is ignored — un-key now rather than wait for a release that will not
+         * be delivered. */
+        if (m_holders > 0 || isKeyed())
+            forceUnkey("the keyboard binding was removed");
         portal->stop();
         return;
     }
@@ -72,6 +97,9 @@ void PttManager::applyKeyboardBinding(const PttBinding &binding)
         return;
     }
 
+    /* start() closes whatever session there was first; same reasoning. */
+    if (m_holders > 0 || isKeyed())
+        forceUnkey("the keyboard binding was restarted");
     if (!portal->start(binding))
         log_warn("ptt: the keyboard binding could not be started");
 }
@@ -85,14 +113,17 @@ void PttManager::onPressed(PttBackend *b)
     if (m_mode == Mode::Toggle) {
         /* One edge only. The release is ignored, so a toggle behaves the same
          * whether the backend reports releases or not — which is what makes
-         * toggle the honest fallback on a compositor that cannot. */
-        m_latched = !m_latched;
-        app_ptt(m_app, m_latched ? CTL_ON : CTL_OFF);
+         * toggle the honest fallback on a compositor that cannot.
+         *
+         * CTL_TOGGLE, which the core resolves against its own tx_active: the
+         * only state that is never out of date. See m_holders in the header
+         * for what a private latch did instead. */
+        CoreAction::ptt(m_app, CTL_TOGGLE);
         return;
     }
 
     if (++m_holders == 1)
-        app_ptt(m_app, CTL_ON);
+        CoreAction::ptt(m_app, CTL_ON);
 }
 
 void PttManager::onReleased(PttBackend *b)
@@ -102,7 +133,7 @@ void PttManager::onReleased(PttBackend *b)
         return;
 
     if (m_holders > 0 && --m_holders == 0)
-        app_ptt(m_app, CTL_OFF);
+        CoreAction::ptt(m_app, CTL_OFF);
 }
 
 void PttManager::forceUnkey(const char *why)
@@ -110,7 +141,6 @@ void PttManager::forceUnkey(const char *why)
     const bool wasKeyed = isKeyed();
 
     m_holders = 0;
-    m_latched = false;
 
     if (!m_app)
         return;
@@ -118,7 +148,7 @@ void PttManager::forceUnkey(const char *why)
     /* Unconditionally, not only when we think we were keyed: the whole point
      * of this path is that our idea of the state may be wrong. app_ptt(OFF)
      * on an already-idle transmitter is a no-op in the core. */
-    app_ptt(m_app, CTL_OFF);
+    CoreAction::ptt(m_app, CTL_OFF);
 
     if (wasKeyed)
         log_info("ptt: un-keyed (%s)", why);

@@ -15,8 +15,11 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
+
+#include <memory>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QTimer>
 
 namespace HyprlandBinding {
 
@@ -313,18 +316,63 @@ QString fifoExample(const QString &fifoPath, const QString &keys)
 
 /* ---- live -------------------------------------------------------------- */
 
-QString boundKeys()
+namespace {
+QString g_cachedKeys;   /* GUI thread only */
+constexpr int kHyprctlTimeoutMs = 3000;
+} // namespace
+
+QString cachedBoundKeys()
 {
-    if (isHyprland()) {
-        bool ok = false;
-        const QByteArray json = hyprctl({QStringLiteral("binds"), QStringLiteral("-j")}, &ok);
-        if (ok) {
-            const QString keys = keysFromBindsJson(json);
-            if (!keys.isEmpty())
-                return keys;
-        }
+    return g_cachedKeys;
+}
+
+void refreshBoundKeys(QObject *context, std::function<void(const QString &)> done)
+{
+    auto finish = [done](const QByteArray &json) {
+        QString keys = json.isEmpty() ? QString() : keysFromBindsJson(json);
+        if (keys.isEmpty())
+            keys = keysFromLua(readFile(bindingsFile()));
+        g_cachedKeys = keys;
+        if (done)
+            done(keys);
+    };
+
+    if (!isHyprland()) {
+        /* Still queued, so a caller sees the same order either way. */
+        QTimer::singleShot(0, context, [finish]() { finish(QByteArray()); });
+        return;
     }
-    return keysFromLua(readFile(bindingsFile()));
+
+    /* The process belongs to `context`: if that goes first, so does this,
+     * and `done` is never called on a dead object. */
+    auto *p = new QProcess(context);
+    auto claimed = std::make_shared<bool>(false);
+    auto settle = [p, claimed, finish](const QByteArray &json) {
+        if (*claimed)
+            return;
+        *claimed = true;
+        p->deleteLater();
+        finish(json);
+    };
+
+    QObject::connect(p, &QProcess::finished, context,
+                     [p, settle](int code, QProcess::ExitStatus st) {
+                         settle(st == QProcess::NormalExit && code == 0
+                                    ? p->readAllStandardOutput() : QByteArray());
+                     });
+    QObject::connect(p, &QProcess::errorOccurred, context,
+                     [settle](QProcess::ProcessError e) {
+                         if (e == QProcess::FailedToStart)
+                             settle(QByteArray());
+                     });
+    /* A Hyprland whose socket does not answer must not leave the hint blank
+     * for ever: give up, kill it, and fall back to reading the file. */
+    QTimer::singleShot(kHyprctlTimeoutMs, p, [p, settle]() {
+        p->kill();
+        settle(QByteArray());
+    });
+
+    p->start(QStringLiteral("hyprctl"), {QStringLiteral("binds"), QStringLiteral("-j")});
 }
 
 QString conflictFor(const QString &keys)

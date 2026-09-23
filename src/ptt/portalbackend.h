@@ -39,6 +39,8 @@
 #include <QDir>
 #include <QMetaType>
 
+#include <functional>
+
 /* The portal's a(sa{sv}) — an array of (shortcut id, properties) structs.
  *
  * QtDBus cannot marshal this on its own: it has no idea that the pair is a
@@ -55,6 +57,10 @@ Q_DECLARE_METATYPE(ShortcutList)
 class QDBusArgument;
 QDBusArgument &operator<<(QDBusArgument &arg, const Shortcut &s);
 const QDBusArgument &operator>>(const QDBusArgument &arg, Shortcut &s);
+
+class QDBusServiceWatcher;
+class QDBusPendingCall;
+class QDBusMessage;
 
 class PortalBackend : public PttBackend {
     Q_OBJECT
@@ -94,14 +100,26 @@ private slots:
                        qulonglong timestamp, const QVariantMap &options);
     void onShortcutsChanged(const QDBusObjectPath &session, const ShortcutList &shortcuts);
 
+    /* The two ways a session dies without a Deactivated: the desktop closes it
+     * (org.freedesktop.portal.Session::Closed), or xdg-desktop-portal itself
+     * exits or restarts and takes every session with it. Either is lost(). */
+    void onSessionClosed(const QVariantMap &details);
+    void onPortalVanished();
+    void onPortalAppeared();
+
 private:
     /* Subscribe to Activated / Deactivated / ShortcutsChanged. MUST run on
      * every start, on BOTH paths — adopting an existing registration and
      * creating a new one — or the shortcut fires into nothing. */
     void subscribeSignals();
 
+    void createSession();
     void listShortcuts();
     void bindShortcut();
+
+    /* Run `then` with the reply once it arrives, on this thread. */
+    void whenAnswered(const QDBusPendingCall &call,
+                      std::function<void(const QDBusMessage &)> then);
 
     /* Our entry in a portal a(sa{sv}) reply. `found` says whether it was
      * listed at all; the returned trigger may still be empty. */
@@ -111,13 +129,21 @@ private:
      * a bare "Return", which would transmit on every Enter keypress). */
     bool acceptTrigger(const QString &bound);
 
+    /* The session is gone and will deliver nothing more: release a held key,
+     * forget the session, and say so. */
+    void sessionLost(const QString &why);
+
     bool    m_conn = false;
     bool    m_registered = false;
     bool    m_subscribed = false;
     bool    m_hyprland = false;
+    bool    m_down = false;        /* Activated seen, Deactivated not yet */
+    quint64 m_generation = 0;      /* bumped by stop(); stale replies compare */
     QString m_session;
     QString m_requested;
     QString m_active;
+
+    QDBusServiceWatcher *m_watcher = nullptr;
 };
 
 #endif

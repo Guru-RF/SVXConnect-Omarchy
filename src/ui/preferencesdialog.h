@@ -112,6 +112,7 @@ private:
     QWidget *buildPttTab();
     QWidget *buildGeneralTab();
     void     refreshPttStatus();
+    void     applyBoundKeys(const QString &keys);
     void     savePtt();
 
     void load();
