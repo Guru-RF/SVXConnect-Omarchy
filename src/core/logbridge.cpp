@@ -17,6 +17,7 @@
 #include <QByteArray>
 #include <QAtomicInteger>
 
+#include <atomic>
 #include <cstdio>
 #include <ctime>
 
@@ -28,7 +29,10 @@ QMutex                 g_mx;
 QVector<LogLine>       g_ring;
 QAtomicInteger<quint64> g_serial{0};
 std::FILE             *g_file = nullptr;   /* guarded by g_mx — see below */
-bool                   g_redact = true;
+/* Atomic, not under g_mx: the sink reads it on every line — including from
+ * the connect worker thread — before it takes the lock. A plain bool written
+ * under the lock and read outside it is a data race. */
+std::atomic<bool>      g_redact{true};
 bool                   g_installed = false;
 
 /* Redaction.
@@ -71,7 +75,7 @@ void svxcLogSink(int level, const char *body, void *)
     std::strftime(ts, sizeof ts, "%H:%M:%S", &tm);
 
     QString text = QString::fromUtf8(body);
-    if (g_redact)
+    if (g_redact.load(std::memory_order_relaxed))
         text = redactLine(std::move(text));
 
     const QString line = QLatin1String(ts) + QLatin1String(" [")
@@ -141,14 +145,12 @@ void setFile(const QString &path)
 
 void setRedaction(bool on)
 {
-    QMutexLocker lk(&g_mx);
-    g_redact = on;
+    g_redact.store(on, std::memory_order_relaxed);
 }
 
 bool redaction()
 {
-    QMutexLocker lk(&g_mx);
-    return g_redact;
+    return g_redact.load(std::memory_order_relaxed);
 }
 
 quint64 serial()
