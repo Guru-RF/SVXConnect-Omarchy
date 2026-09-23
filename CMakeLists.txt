@@ -243,6 +243,18 @@ target_include_directories(test_coreloop PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_coreloop PRIVATE svxcore Qt6::Core)
 add_test(NAME coreloop COMMAND test_coreloop)
 
+add_executable(test_pttmanager
+    tests/test_pttmanager.cpp
+    src/ptt/pttbackend.h
+    src/ptt/pttmanager.cpp
+    src/ptt/portalbackend.cpp
+    src/ptt/hyprlandbinding.cpp
+    src/core/coreaction.cpp)
+target_include_directories(test_pttmanager PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_pttmanager PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_pttmanager PRIVATE svxcore Qt6::Core Qt6::DBus)
+add_test(NAME pttmanager COMMAND test_pttmanager)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------

@@ -167,6 +167,12 @@ MainWindow::MainWindow(svx_app *app, QWidget *parent)
     });
     applyPttBindings();
 
+    /* The core's own backstop against a transmitter nobody can un-key. The
+     * dialog no longer offers 0, but a hand-edited file can still say it. */
+    if (m_cfg && m_cfg->tx_timeout_sec <= 0)
+        log_warn("tx_timeout_sec is 0: a lost push-to-talk release would transmit "
+                 "without limit — set a timeout in Preferences");
+
     /* The tray, and with it the ability to close the window without killing
      * the push-to-talk shortcut. */
     m_tray = new TrayIcon(m_app, this);
@@ -651,6 +657,30 @@ bool MainWindow::event(QEvent *event)
     if (event->type() == QEvent::WindowActivate)
         refreshPttHint();
     return QMainWindow::event(event);
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+        releaseMouseHold("the window lost focus");
+    QMainWindow::changeEvent(event);
+}
+
+void MainWindow::hideEvent(QHideEvent *event)
+{
+    releaseMouseHold("the window was hidden");
+    QMainWindow::hideEvent(event);
+}
+
+void MainWindow::releaseMouseHold(const char *why)
+{
+    if (!m_ptt || !m_ptt->isDown())
+        return;
+
+    /* setDown(false) does not emit released(), so un-key explicitly. */
+    m_ptt->setDown(false);
+    CoreAction::ptt(m_app, CTL_OFF);
+    log_info("ptt: mouse hold released (%s)", why);
 }
 
 void MainWindow::onCoreChanged()

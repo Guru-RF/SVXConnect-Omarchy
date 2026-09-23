@@ -12,6 +12,7 @@
 #include <QDBusMetaType>
 #include <QDBusArgument>
 #include <QDBusObjectPath>
+#include <QDBusServiceWatcher>
 #include <QFile>
 #include <QStandardPaths>
 #include <QUuid>
@@ -40,6 +41,7 @@ const char *kPath     = "/org/freedesktop/portal/desktop";
 const char *kIface    = "org.freedesktop.portal.GlobalShortcuts";
 const char *kRequest  = "org.freedesktop.portal.Request";
 const char *kRegistry = "org.freedesktop.host.portal.Registry";
+const char *kSession  = "org.freedesktop.portal.Session";
 
 /* Must equal the basename of an installed .desktop file, or Register fails
  * with "Could not register app ID: App info not found".
@@ -178,6 +180,17 @@ bool PortalBackend::start(const PttBinding &binding)
     }
     m_conn = true;
 
+    /* Watch the portal itself. A portal that exits or restarts while the key
+     * is held never sends the Deactivated, and nothing else would notice. */
+    if (!m_watcher) {
+        m_watcher = new QDBusServiceWatcher(QLatin1String(kService), bus,
+                                            QDBusServiceWatcher::WatchForOwnerChange, this);
+        connect(m_watcher, &QDBusServiceWatcher::serviceUnregistered,
+                this, &PortalBackend::onPortalVanished);
+        connect(m_watcher, &QDBusServiceWatcher::serviceRegistered,
+                this, &PortalBackend::onPortalAppeared);
+    }
+
     /* Registry.Register FIRST, at most once per connection, and never under
      * Flatpak, where the portal already knows the app id. */
     if (!m_registered && !QFile::exists(QStringLiteral("/.flatpak-info"))) {
@@ -236,6 +249,12 @@ void PortalBackend::onCreateSessionResponse(uint code, const QVariantMap &result
     }
 
     log_info("ptt: portal session %s", qPrintable(m_session));
+
+    /* Per session path, so a Closed for an old session cannot be mistaken for
+     * this one. Removed again in stop(). */
+    QDBusConnection(QLatin1String(kConnName)).connect(
+        QLatin1String(kService), m_session, QLatin1String(kSession), QStringLiteral("Closed"),
+        this, SLOT(onSessionClosed(QVariantMap)));
 
     subscribeSignals();
 
@@ -446,6 +465,7 @@ void PortalBackend::onActivated(const QDBusObjectPath &session, const QString &s
      * talkgroup, no link, someone else talking) can be told apart from a key
      * that never arrived — a radio problem versus a binding problem. */
     log_info("ptt: key down");
+    m_down = true;
     emit pressed();
 }
 
@@ -457,6 +477,7 @@ void PortalBackend::onDeactivated(const QDBusObjectPath &session, const QString 
         return;
 
     log_info("ptt: key up");
+    m_down = false;
     emit released();
 }
 
@@ -476,12 +497,66 @@ void PortalBackend::onShortcutsChanged(const QDBusObjectPath &session, const Sho
     }
 }
 
-void PortalBackend::stop()
+void PortalBackend::sessionLost(const QString &why)
 {
     if (m_session.isEmpty())
         return;
 
+    QDBusConnection(QLatin1String(kConnName)).disconnect(
+        QLatin1String(kService), m_session, QLatin1String(kSession), QStringLiteral("Closed"),
+        this, SLOT(onSessionClosed(QVariantMap)));
+    m_session.clear();
+    m_active.clear();
+
+    if (m_down) {
+        m_down = false;
+        emit released();
+    }
+    emit lost(why);
+}
+
+void PortalBackend::onSessionClosed(const QVariantMap &)
+{
+    log_warn("ptt: the desktop closed the portal session %s", qPrintable(m_session));
+    sessionLost(tr("The desktop closed the global-shortcut session."));
+}
+
+void PortalBackend::onPortalVanished()
+{
+    if (m_session.isEmpty())
+        return;
+    log_warn("ptt: the desktop portal went away");
+    /* A new portal process knows nothing of us: register again next time. */
+    m_registered = false;
+    sessionLost(tr("The desktop portal stopped. Push-to-talk comes back by itself "
+                   "when the portal does."));
+}
+
+void PortalBackend::onPortalAppeared()
+{
+    /* Only after a loss: a session we still hold means this is the first
+     * registration of a portal we were already talking to. */
+    if (!m_session.isEmpty() || m_requested.isEmpty())
+        return;
+    log_info("ptt: the desktop portal is back; registering push-to-talk again");
+    start(PttBinding{m_requested});
+}
+
+void PortalBackend::stop()
+{
+    /* A held key's release will never arrive from a session we are closing.
+     * Release it here, so whoever owns the press never has to guess. */
+    if (m_down) {
+        m_down = false;
+        emit released();
+    }
+
+    if (m_session.isEmpty())
+        return;
+
     QDBusConnection bus = QDBusConnection(QLatin1String(kConnName));
+    bus.disconnect(QLatin1String(kService), m_session, QLatin1String(kSession),
+                   QStringLiteral("Closed"), this, SLOT(onSessionClosed(QVariantMap)));
     if (bus.isConnected()) {
         QDBusMessage close = QDBusMessage::createMethodCall(
             QLatin1String(kService), m_session,

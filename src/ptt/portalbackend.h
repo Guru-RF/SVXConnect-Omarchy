@@ -56,6 +56,8 @@ class QDBusArgument;
 QDBusArgument &operator<<(QDBusArgument &arg, const Shortcut &s);
 const QDBusArgument &operator>>(const QDBusArgument &arg, Shortcut &s);
 
+class QDBusServiceWatcher;
+
 class PortalBackend : public PttBackend {
     Q_OBJECT
 
@@ -94,6 +96,13 @@ private slots:
                        qulonglong timestamp, const QVariantMap &options);
     void onShortcutsChanged(const QDBusObjectPath &session, const ShortcutList &shortcuts);
 
+    /* The two ways a session dies without a Deactivated: the desktop closes it
+     * (org.freedesktop.portal.Session::Closed), or xdg-desktop-portal itself
+     * exits or restarts and takes every session with it. Either is lost(). */
+    void onSessionClosed(const QVariantMap &details);
+    void onPortalVanished();
+    void onPortalAppeared();
+
 private:
     /* Subscribe to Activated / Deactivated / ShortcutsChanged. MUST run on
      * every start, on BOTH paths — adopting an existing registration and
@@ -111,13 +120,20 @@ private:
      * a bare "Return", which would transmit on every Enter keypress). */
     bool acceptTrigger(const QString &bound);
 
+    /* The session is gone and will deliver nothing more: release a held key,
+     * forget the session, and say so. */
+    void sessionLost(const QString &why);
+
     bool    m_conn = false;
     bool    m_registered = false;
     bool    m_subscribed = false;
     bool    m_hyprland = false;
+    bool    m_down = false;        /* Activated seen, Deactivated not yet */
     QString m_session;
     QString m_requested;
     QString m_active;
+
+    QDBusServiceWatcher *m_watcher = nullptr;
 };
 
 #endif

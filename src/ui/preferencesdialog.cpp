@@ -798,14 +798,17 @@ QWidget *PreferencesDialog::buildGeneralTab()
            "window is closed to the tray. Click it to bring SVXConnect back. Your own "
            "transmissions never notify."), page));
 
+    /* No "no limit". This is the one defence against a lost push-to-talk
+     * release that does not depend on the desktop, the portal or this process
+     * noticing anything (see ptt/pttmanager.h), and 0 switched it off. A file
+     * that still says 0 shows here as the minimum and is saved as such. */
     m_txTimeout = new QSpinBox(page);
-    m_txTimeout->setRange(0, 3600);
+    m_txTimeout->setRange(10, 3600);
     m_txTimeout->setSuffix(tr(" s"));
-    m_txTimeout->setSpecialValueText(tr("no limit"));
     f->addRow(tr("Transmit timeout"), m_txTimeout);
     f->addRow(QString(), hint(
         tr("Hard un-key after this long, so a stuck push-to-talk cannot leave you "
-           "transmitting. Setting it to \"no limit\" is strongly discouraged."), page));
+           "transmitting."), page));
 
     m_logLevel = new QComboBox(page);
     /* The core's enum is "err|warn|info|debug" — the last is spelled debug,

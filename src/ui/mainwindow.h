@@ -111,6 +111,12 @@ protected:
     /* Re-reads the Hyprland binding when the window is activated, which is
      * when a user who has just edited bindings.lua comes back to look. */
     bool event(QEvent *event) override;
+    /* A mouse hold on the PTT button whose release the window may never see:
+     * losing activation (a workspace switch, the lock screen) or being hidden
+     * breaks the pointer grab, and QAbstractButton does not synthesise a
+     * release for either. Both un-key. */
+    void changeEvent(QEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private slots:
     void tickModel();     /* 100 ms */
@@ -118,6 +124,7 @@ private slots:
 
     void onPttPressed();
     void onPttReleased();
+    void releaseMouseHold(const char *why);
 
     void onPreferences();
     void onEditConfig();
