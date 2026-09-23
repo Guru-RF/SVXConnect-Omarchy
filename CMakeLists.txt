@@ -263,6 +263,16 @@ target_include_directories(test_audiohealth PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_audiohealth PRIVATE Qt6::Core)
 add_test(NAME audiohealth COMMAND test_audiohealth)
 
+add_executable(test_trayicon
+    tests/test_trayicon.cpp
+    src/ui/trayicon.cpp
+    src/ui/omarchytheme.cpp
+    src/core/coreaction.cpp)
+target_include_directories(test_trayicon PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_trayicon PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_trayicon PRIVATE svxcore Qt6::Widgets Qt6::Svg)
+add_test(NAME trayicon COMMAND test_trayicon)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
