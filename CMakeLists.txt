@@ -314,6 +314,16 @@ target_compile_definitions(test_feedliveness PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_feedliveness PRIVATE svxcore Qt6::Core Qt6::Network Qt6::WebSockets)
 add_test(NAME feedliveness COMMAND test_feedliveness)
 
+add_executable(test_portalfetch
+    tests/test_portalfetch.cpp
+    src/net/portalinfo.cpp)
+target_include_directories(test_portalfetch PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_portalfetch PRIVATE
+    SVXCONNECT_VERSION="${SVXCONNECT_VERSION}"
+    QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_portalfetch PRIVATE svxcore Qt6::Core Qt6::Network)
+add_test(NAME portalfetch COMMAND test_portalfetch)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
