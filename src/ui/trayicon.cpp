@@ -2,6 +2,7 @@
  * SVXConnect-Omarchy — Copyright (c) 2026 Diëlectricum BV
  */
 #include "ui/trayicon.h"
+#include "core/coreaction.h"
 #include "ui/theme.h"
 
 #include <QSystemTrayIcon>
@@ -66,12 +67,12 @@ void TrayIcon::rebuildMenu()
     m_pttAction = m_menu->addAction(tr("Transmit"));
     m_pttAction->setCheckable(true);
     connect(m_pttAction, &QAction::triggered, this, [this]() {
-        if (m_app) app_ptt(m_app, CTL_TOGGLE);
+        CoreAction::ptt(m_app, CTL_TOGGLE);
     });
 
     m_connectAction = m_menu->addAction(tr("Disconnect"));
     connect(m_connectAction, &QAction::triggered, this, [this]() {
-        if (m_app) app_toggle_connect(m_app);
+        CoreAction::toggleConnect(m_app);
     });
 
     m_menu->addSeparator();

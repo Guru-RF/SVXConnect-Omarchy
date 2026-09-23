@@ -84,6 +84,7 @@ set(APP_SOURCES
     src/main.cpp
 
     src/core/coreloop.cpp        src/core/coreloop.h
+    src/core/coreaction.cpp      src/core/coreaction.h
     src/core/logbridge.cpp       src/core/logbridge.h
     src/core/runlock.cpp         src/core/runlock.h
     src/core/devlist.cpp         src/core/devlist.h
@@ -233,6 +234,14 @@ target_include_directories(test_hyprlandbinding PRIVATE "${CMAKE_SOURCE_DIR}/src
 target_compile_definitions(test_hyprlandbinding PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_hyprlandbinding PRIVATE svxcore Qt6::Core)
 add_test(NAME hyprlandbinding COMMAND test_hyprlandbinding)
+
+add_executable(test_coreloop
+    tests/test_coreloop.cpp
+    src/core/coreloop.cpp
+    src/core/coreaction.cpp)
+target_include_directories(test_coreloop PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_coreloop PRIVATE svxcore Qt6::Core)
+add_test(NAME coreloop COMMAND test_coreloop)
 
 # ---------------------------------------------------------------------------
 # Install

@@ -17,6 +17,7 @@
 #include "ptt/pttmanager.h"
 #include "ptt/hyprlandbinding.h"
 #include "core/logbridge.h"
+#include "core/coreaction.h"
 
 #include <QApplication>
 #include <QVBoxLayout>
@@ -503,7 +504,7 @@ void MainWindow::buildActions()
 
     QAction *reconnect = action(tr("Reconnect"), QStringLiteral("Ctrl+R"));
     connect(reconnect, &QAction::triggered, this, [this]() {
-        if (m_app) app_reconnect(m_app);
+        CoreAction::reconnect(m_app);
     });
 
     QAction *lock = action(tr("Lock talkgroup"), QStringLiteral("Ctrl+K"));
@@ -615,12 +616,12 @@ void MainWindow::keyPressEvent(QKeyEvent *e)
      * isAutoRepeat() is checked anyway, so holding Space does not chatter the
      * transmitter on and off. */
     if (e->key() == Qt::Key_Space && !e->isAutoRepeat()) {
-        app_ptt(m_app, CTL_TOGGLE);
+        CoreAction::ptt(m_app, CTL_TOGGLE);
         e->accept();
         return;
     }
     if (e->key() == Qt::Key_Escape) {
-        app_ptt(m_app, CTL_OFF);
+        CoreAction::ptt(m_app, CTL_OFF);
         e->accept();
         return;
     }
@@ -952,12 +953,12 @@ void MainWindow::refreshLog()
 
 void MainWindow::onPttPressed()
 {
-    if (m_app) app_ptt(m_app, CTL_ON);
+    CoreAction::ptt(m_app, CTL_ON);
 }
 
 void MainWindow::onPttReleased()
 {
-    if (m_app) app_ptt(m_app, CTL_OFF);
+    CoreAction::ptt(m_app, CTL_OFF);
 }
 
 void MainWindow::setConfigPath(const QString &path)
@@ -1072,7 +1073,7 @@ void MainWindow::onRestartRequested()
     /* Never restart with the transmitter keyed. Drop the carrier first,
      * explicitly, so the reflector sees a clean end of transmission. */
     if (m_app && app_tx_active(m_app)) {
-        app_ptt(m_app, CTL_OFF);
+        CoreAction::ptt(m_app, CTL_OFF);
         log_info("unkeyed before restarting");
     }
 

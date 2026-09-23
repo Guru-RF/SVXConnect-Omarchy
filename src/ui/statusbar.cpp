@@ -2,6 +2,7 @@
  * SVXConnect-Omarchy — Copyright (c) 2026 Diëlectricum BV
  */
 #include "ui/statusbar.h"
+#include "core/coreaction.h"
 #include "ui/theme.h"
 
 #include <QHBoxLayout>
@@ -76,7 +77,7 @@ void ConnectionBar::buildUi()
     m_connect->setCursor(Qt::PointingHandCursor);
     m_connect->setFocusPolicy(Qt::NoFocus);   /* Space is transmit in this window */
     connect(m_connect, &QPushButton::clicked, this, [this]() {
-        if (m_app) app_toggle_connect(m_app);
+        CoreAction::toggleConnect(m_app);
     });
     m_row->addWidget(m_connect);
 }
