@@ -310,15 +310,23 @@ void Sidebar::tickModel(quint64 nowMs)
     }
 }
 
-void Sidebar::tickMeters()
+void Sidebar::tickMeters(bool micFlowing)
 {
     if (!m_app) return;
 
-    /* app_mic_level() holds its last peak after capture stops, so gate it on
-     * transmit; the speaker meter must read zero while muted rather than
-     * showing what would have played. */
-    const float mic = app_tx_active(m_app)    ? app_mic_level(m_app) : 0.0f;
-    const float spk = app_output_muted(m_app) ? 0.0f : app_spk_level(m_app);
+    /* Both levels are written only by their audio callbacks and hold their
+     * last value when a callback stops — after an over, and also when a
+     * device dies under us, which is when a frozen meter lies worst: 0.1.13
+     * showed a plausible microphone level through eight seconds in which
+     * nothing was captured. So the microphone is gated on frames actually
+     * leaving, not on the transmitter being keyed, and either level that has
+     * not changed at all for a moment is treated as silence and decays. The
+     * speaker meter must also read zero while muted rather than showing what
+     * would have played. */
+    const qint64 now = qint64(now_ms());
+    const float mic = micFlowing ? m_micStale.filter(app_mic_level(m_app), now) : 0.0f;
+    const float spk = app_output_muted(m_app) ? 0.0f
+                                              : m_spkStale.filter(app_spk_level(m_app), now);
 
     auto ballistic = [](float in, float &vu) {
         vu = (in > vu) ? in : vu * 0.75f;

@@ -14,13 +14,14 @@
 TrayIcon::TrayIcon(svx_app *app, QObject *parent)
     : QObject(parent), m_app(app)
 {
+    buildMenu();
+
     if (!QSystemTrayIcon::isSystemTrayAvailable())
         return;
 
     m_tray = new QSystemTrayIcon(this);
-    rebuildMenu();
-
-    m_tray->setIcon(iconFor(false, false));
+    m_tray->setContextMenu(m_menu);
+    m_tray->setIcon(iconFor(false, TxMonitor::State::Idle));
     m_tray->setToolTip(tr("SVXConnect"));
 
     connect(m_tray, &QSystemTrayIcon::activated, this,
@@ -35,9 +36,9 @@ TrayIcon::TrayIcon(svx_app *app, QObject *parent)
     /* The state dot is drawn in the theme's colours; redraw it on a switch. */
     connect(&OmarchyTheme::get(), &OmarchyTheme::changed, this, [this]() {
         m_stateInit = false;
-        tickModel();
+        tickModel(m_shownTx);
         if (!m_app && m_tray)
-            m_tray->setIcon(iconFor(false, false));
+            m_tray->setIcon(iconFor(false, TxMonitor::State::Idle));
     });
 
     m_tray->show();
@@ -45,6 +46,16 @@ TrayIcon::TrayIcon(svx_app *app, QObject *parent)
 
 TrayIcon::~TrayIcon()
 {
+    /* The tray first. Its platform icon (QDBusTrayIcon) was handed this menu's
+     * platform menu, and would otherwise outlive the menu by the length of
+     * QObject's child teardown — the "destruction order at quit" shape that
+     * has crashed this application before. Qt's own QPointer probably covers
+     * it; this does not rely on that. */
+    if (m_tray) {
+        m_tray->setContextMenu(nullptr);
+        delete m_tray;
+        m_tray = nullptr;
+    }
     delete m_menu;
 }
 
@@ -53,7 +64,7 @@ bool TrayIcon::isAvailable() const
     return m_tray != nullptr;
 }
 
-void TrayIcon::rebuildMenu()
+void TrayIcon::buildMenu()
 {
     m_menu = new QMenu;
 
@@ -79,11 +90,9 @@ void TrayIcon::rebuildMenu()
 
     QAction *quit = m_menu->addAction(tr("Quit"));
     connect(quit, &QAction::triggered, this, &TrayIcon::quitRequested);
-
-    m_tray->setContextMenu(m_menu);
 }
 
-QIcon TrayIcon::iconFor(bool connected, bool transmitting) const
+QIcon TrayIcon::iconFor(bool connected, TxMonitor::State tx) const
 {
     /* The application icon with a state dot in the corner, in the theme's
      * red / green / muted — the same colours as the window's own status dot. */
@@ -99,9 +108,12 @@ QIcon TrayIcon::iconFor(bool connected, bool transmitting) const
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    const QColor dot = transmitting ? Theme::tx()
-                     : connected    ? Theme::connected()
-                                    : Theme::down();
+    /* Red only while audio is leaving. Keyed with nothing leaving is the
+     * warning colour: it is not "on the air", and must not look like it. */
+    const QColor dot = tx == TxMonitor::State::OnAir ? Theme::tx()
+                     : tx != TxMonitor::State::Idle  ? Theme::busy()
+                     : connected                     ? Theme::connected()
+                                                     : Theme::down();
 
     const qreal r = px * 0.22;
     const QPointF c(px - r - 2, px - r - 2);
@@ -118,25 +130,28 @@ QIcon TrayIcon::iconFor(bool connected, bool transmitting) const
     return QIcon(pm);
 }
 
-void TrayIcon::tickModel()
+void TrayIcon::tickModel(TxMonitor::State tx)
 {
-    if (!m_tray || !m_app)
+    if (!m_app)
         return;
 
     const rc_state st = rc_get_state(app_rc(m_app));
     const bool connected = (st == RC_CONNECTED);
-    const bool tx        = app_tx_active(m_app) != 0;
+
+    /* Every tick; both setters return at once when nothing changed. The check
+     * mark is whether the core is KEYED — it is what a click would undo — and
+     * the label is what app_toggle_connect() will do in THIS state. */
+    m_pttAction->setChecked(app_tx_active(m_app) != 0);
+    m_connectAction->setText(st == RC_IDLE ? tr("Connect") : tr("Disconnect"));
+
+    if (!m_tray)
+        return;
 
     if (!m_stateInit || connected != m_shownConnected || tx != m_shownTx) {
         m_stateInit      = true;
         m_shownConnected = connected;
         m_shownTx        = tx;
         m_tray->setIcon(iconFor(connected, tx));
-
-        if (m_pttAction)
-            m_pttAction->setChecked(tx);
-        if (m_connectAction)
-            m_connectAction->setText(st == RC_IDLE ? tr("Connect") : tr("Disconnect"));
     }
 
     /* The tooltip carries the callsign and talkgroup: a StatusNotifierItem has
@@ -152,8 +167,10 @@ void TrayIcon::tickModel()
                       .arg(QString::fromUtf8(cfg->callsign), state);
     if (connected)
         tip += tg ? tr("  ·  TG %1").arg(tg) : tr("  ·  monitoring");
-    if (tx)
+    if (tx == TxMonitor::State::OnAir)
         tip += tr("\nTRANSMITTING");
+    else if (tx == TxMonitor::State::NoAudio)
+        tip += tr("\nKEYED — NOTHING IS BEING SENT (no microphone audio)");
 
     if (tip != m_tip) {
         m_tip = tip;

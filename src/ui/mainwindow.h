@@ -33,6 +33,7 @@
 #include <QMainWindow>
 
 #include "core/svxcore.h"
+#include "core/audiohealth.h"
 #include "net/qrzlookup.h"
 
 #include <QHash>
@@ -137,6 +138,13 @@ private:
     void refreshBanner();
     void refreshLog();
     void refreshPttButton();
+
+    /* Is audio actually moving? Sampled on both ticks from the core's packet
+     * counter and jitter depth — see core/audiohealth.h — and acted on from
+     * the model tick when it is not. */
+    void sampleAudioHealth();
+    void onMicStalled();
+    void onPlaybackStalled();
     void refreshPttHint();
     void watchConfig();
 
@@ -181,6 +189,7 @@ private:
     QTimer         *m_mapTick   = nullptr;   /* 500 ms while the map is up   */
     QLabel         *m_banner    = nullptr;   /* the core's banner          */
     QLabel         *m_pttBanner = nullptr;   /* a lost push-to-talk control */
+    QLabel         *m_audioBanner = nullptr; /* a device that stopped delivering */
     QWidget        *m_reload    = nullptr;
     QPushButton    *m_ptt       = nullptr;
     QLabel         *m_pttHint   = nullptr;
@@ -211,8 +220,11 @@ private:
     QHash<QString, QrzLookup::Record> m_qrzSeen;
     QString m_stationOpen;   /* the callsign whose card is open, if any */
 
+    TxMonitor       m_txHealth;
+    PlaybackMonitor m_playHealth;
+
     quint64 m_lastLogSerial = 0;
-    bool    m_lastTxActive  = false;
+    TxMonitor::State m_shownTx = TxMonitor::State::Idle;
     bool    m_txInit        = false;
 };
 

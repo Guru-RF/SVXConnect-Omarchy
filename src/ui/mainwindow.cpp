@@ -324,6 +324,12 @@ void MainWindow::buildUi()
     m_pttBanner->installEventFilter(this);
     root->addWidget(m_pttBanner);
 
+    /* A microphone or speaker that stopped delivering, found by the window
+     * rather than the core — so, like the push-to-talk bar, not the core's. */
+    m_audioBanner = notice("error", central);
+    m_audioBanner->installEventFilter(this);
+    root->addWidget(m_audioBanner);
+
     /* Shown when svxconnect.conf changes on disk while running.
      *
      * Nothing is reloaded in place, deliberately: app_new() keeps the
@@ -644,8 +650,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             m_banner->hide();
             return true;
         }
-        if (watched == m_pttBanner) {
-            m_pttBanner->hide();
+        if (watched == m_pttBanner || watched == m_audioBanner) {
+            static_cast<QWidget *>(watched)->hide();
             return true;
         }
     }
@@ -692,7 +698,13 @@ void MainWindow::tickModel()
 {
     const quint64 now = m_app ? now_ms() : 0;
 
-    if (m_tray) m_tray->tickModel();
+    sampleAudioHealth();
+    if (m_txHealth.takeStall())
+        onMicStalled();
+    if (m_playHealth.takeStall())
+        onPlaybackStalled();
+
+    if (m_tray) m_tray->tickModel(m_txHealth.state());
     m_status->tickModel(now);
     m_sidebar->tickModel(now);
     m_activity->tickModel(now);
@@ -779,8 +791,9 @@ void MainWindow::refreshMapMarkers()
     const QString own = m_cfg ? QString::fromUtf8(m_cfg->callsign).toUpper() : QString();
 
     /* Your own transmission frames the map like anybody else's. The feed will
-     * say so too, a moment later; the core knows now. */
-    const bool txNow = m_app && app_tx_active(m_app);
+     * say so too, a moment later; the core knows now — and only when audio is
+     * actually leaving, not merely when the transmitter is keyed. */
+    const bool txNow = m_txHealth.state() == TxMonitor::State::OnAir;
 
     if (m_feed) {
         const QHash<QString, ReflectorFeed::Node> &nodes = m_feed->nodes();
@@ -906,7 +919,72 @@ void MainWindow::resizeEvent(QResizeEvent *e)
 
 void MainWindow::tickMeters()
 {
-    m_sidebar->tickMeters();
+    sampleAudioHealth();
+    m_sidebar->tickMeters(m_txHealth.audioFlowing());
+}
+
+void MainWindow::sampleAudioHealth()
+{
+    if (!m_app)
+        return;
+
+    rc_stats st{};
+    rc_get_stats(app_rc(m_app), &st);
+    const qint64 now = qint64(now_ms());
+    m_txHealth.sample(app_tx_active(m_app) != 0, st.tx_packets, now);
+    m_playHealth.sample(app_audio_ready(m_app) != 0, app_jitter_ms(m_app), now);
+}
+
+void MainWindow::onMicStalled()
+{
+    /* Keyed for kStallMs and not one frame left: the capture stream is up as
+     * far as the audio system is concerned and delivers nothing. 0.1.13 sat in
+     * exactly this state showing TRANSMITTING until the operator restarted.
+     *
+     * Un-key, so the display, the reflector and the operator agree nothing is
+     * on the air; then reopen the input device, which is what the restart
+     * cured — the same call Preferences makes, and safe outside app_service().
+     * Copy the name first: app_set_input_device() writes it back into the very
+     * buffer it would otherwise be reading from. */
+    log_err("TX: keyed for %lld ms and nothing was sent — the microphone delivers no "
+            "audio; un-keying and reopening the input device",
+            static_cast<long long>(m_txHealth.silentForMs()));
+
+    releaseMouseHold("the microphone delivered no audio");
+    m_pttManager->forceUnkey("the microphone delivered no audio");
+
+    const QByteArray device(app_config(m_app)->input_device);
+    app_set_input_device(m_app, device.constData());
+
+    m_audioBanner->setText(tr("Nothing was transmitted: the microphone stopped delivering "
+                              "audio. SVXConnect un-keyed and reopened it — try again, and "
+                              "check the input device in Preferences if this repeats."));
+    m_audioBanner->show();
+}
+
+void MainWindow::onPlaybackStalled()
+{
+    /* The jitter buffer has sat full for seconds: the playback callback is not
+     * draining it, so nothing you receive reaches the speaker. Reopening the
+     * output tears down the whole audio context (1-2 s) and closes the
+     * microphone with it, so never in the middle of an over. */
+    if (app_tx_active(m_app)) {
+        log_warn("audio: the speaker stopped playing; will reopen it after this over");
+        return;
+    }
+
+    log_err("audio: the output device stopped playing (%u ms buffered and not "
+            "draining); reopening it", app_jitter_ms(m_app));
+
+    const QByteArray device(app_config(m_app)->output_device);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    app_set_output_device(m_app, device.constData());
+    QApplication::restoreOverrideCursor();
+
+    m_audioBanner->setText(tr("The speaker stopped playing what the reflector sends. "
+                              "SVXConnect reopened the output device; check it in "
+                              "Preferences if this repeats."));
+    m_audioBanner->show();
 }
 
 void MainWindow::refreshBanner()
@@ -926,16 +1004,35 @@ void MainWindow::refreshBanner()
 
 void MainWindow::refreshPttButton()
 {
-    const bool tx = m_app && app_tx_active(m_app);
-    if (m_txInit && tx == m_lastTxActive)
+    const TxMonitor::State st = m_txHealth.state();
+    if (m_txInit && st == m_shownTx)
         return;
     m_txInit = true;
-    m_lastTxActive = tx;
+    m_shownTx = st;
 
-    /* The theme's red, solid, with the background as text — it must read as
-     * "on the air" at a glance, including on an unfocused window. */
-    Theme::setProp(m_ptt, "tx", tx);
-    m_ptt->setText(tx ? tr("TRANSMITTING") : tr("PUSH TO TALK"));
+    /* TRANSMITTING only while audio is leaving — never merely because the
+     * transmitter is keyed. The theme's red, solid, with the background as
+     * text: it must read as "on the air" at a glance, including on an
+     * unfocused window. A keyed transmitter sending nothing gets the warning
+     * colour and says so. */
+    switch (st) {
+    case TxMonitor::State::Idle:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("false"));
+        m_ptt->setText(tr("PUSH TO TALK"));
+        break;
+    case TxMonitor::State::Keying:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("keying"));
+        m_ptt->setText(tr("KEYING…"));
+        break;
+    case TxMonitor::State::OnAir:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("true"));
+        m_ptt->setText(tr("TRANSMITTING"));
+        break;
+    case TxMonitor::State::NoAudio:
+        Theme::setProp(m_ptt, "tx", QStringLiteral("noaudio"));
+        m_ptt->setText(tr("NOT TRANSMITTING — NO MICROPHONE AUDIO"));
+        break;
+    }
 }
 
 void MainWindow::refreshPttHint()

@@ -748,6 +748,12 @@ QPushButton[role="ptt"][tx="true"]:hover,
 QPushButton[role="ptt"][tx="true"]:pressed {
     background: {red}; color: {bg}; border-color: {red};
 }
+QPushButton[role="ptt"][tx="keying"] { color: {red}; border-color: {red}; }
+QPushButton[role="ptt"][tx="noaudio"],
+QPushButton[role="ptt"][tx="noaudio"]:hover,
+QPushButton[role="ptt"][tx="noaudio"]:pressed {
+    background: {yellow}; color: {bg}; border-color: {yellow};
+}
 
 /* ---- inputs ---- */
 QLineEdit, QSpinBox, QComboBox, QPlainTextEdit {

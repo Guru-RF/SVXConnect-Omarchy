@@ -15,6 +15,7 @@
 #include <QIcon>
 
 #include "core/svxcore.h"
+#include "core/audiohealth.h"
 
 class QSystemTrayIcon;
 class QMenu;
@@ -29,9 +30,22 @@ public:
 
     bool isAvailable() const;
 
-    /* Called from the 100 ms model tick. Cheap: it only touches the icon and
-     * tooltip when the state it renders has actually changed. */
-    void tickModel();
+    /* Called from the 100 ms model tick with the window's verdict on whether
+     * audio is leaving (see core/audiohealth.h): the dot is red only while it
+     * is, never merely because the transmitter is keyed. Cheap: the icon and
+     * tooltip are only touched when what they show has changed.
+     *
+     * The menu items are re-synchronised on EVERY tick, not only on a change.
+     * "Transmit" is checkable and Qt flips its check mark on the click itself,
+     * so a press the core refuses left it checked while idle; and the
+     * Connect/Disconnect label followed "connected or not", so across
+     * connecting and reconnecting it said the opposite of what a click did. */
+    void tickModel(TxMonitor::State tx);
+
+    /* The menu's items, for the tests. The menu exists even where no tray
+     * does. */
+    QAction *pttAction() const     { return m_pttAction; }
+    QAction *connectAction() const { return m_connectAction; }
 
     /* Shown once, the first time the window is closed, so "it did not quit"
      * is an explanation rather than a surprise. */
@@ -42,8 +56,8 @@ signals:
     void quitRequested();
 
 private:
-    void rebuildMenu();
-    QIcon iconFor(bool connected, bool transmitting) const;
+    void buildMenu();
+    QIcon iconFor(bool connected, TxMonitor::State tx) const;
 
     svx_app         *m_app  = nullptr;
     QSystemTrayIcon *m_tray = nullptr;
@@ -54,7 +68,7 @@ private:
     /* What the icon currently depicts, so a 10 Hz tick does not reassign the
      * same QIcon forever — on some StatusNotifierItem hosts that flickers. */
     bool m_shownConnected = false;
-    bool m_shownTx        = false;
+    TxMonitor::State m_shownTx = TxMonitor::State::Idle;
     bool m_stateInit      = false;
     QString m_tip;
 };

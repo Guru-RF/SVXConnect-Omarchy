@@ -85,6 +85,7 @@ set(APP_SOURCES
 
     src/core/coreloop.cpp        src/core/coreloop.h
     src/core/coreaction.cpp      src/core/coreaction.h
+    src/core/audiohealth.cpp     src/core/audiohealth.h
     src/core/logbridge.cpp       src/core/logbridge.h
     src/core/runlock.cpp         src/core/runlock.h
     src/core/devlist.cpp         src/core/devlist.h
@@ -254,6 +255,13 @@ target_include_directories(test_pttmanager PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_compile_definitions(test_pttmanager PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_pttmanager PRIVATE svxcore Qt6::Core Qt6::DBus)
 add_test(NAME pttmanager COMMAND test_pttmanager)
+
+add_executable(test_audiohealth
+    tests/test_audiohealth.cpp
+    src/core/audiohealth.cpp)
+target_include_directories(test_audiohealth PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_audiohealth PRIVATE Qt6::Core)
+add_test(NAME audiohealth COMMAND test_audiohealth)
 
 # ---------------------------------------------------------------------------
 # Install

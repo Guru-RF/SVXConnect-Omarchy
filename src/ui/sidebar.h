@@ -11,6 +11,7 @@
 #include <QVector>
 
 #include "core/svxcore.h"
+#include "core/audiohealth.h"
 
 class QLabel;
 class QToolButton;
@@ -30,8 +31,9 @@ public:
     void tickModel(quint64 nowMs);
 
     /* 33 ms: meters only. Separate entry point so the fast path touches
-     * nothing but two LevelMeter::setLevel() calls. */
-    void tickMeters();
+     * nothing but two LevelMeter::setLevel() calls. `micFlowing` is whether
+     * audio frames are actually leaving (TxMonitor::audioFlowing()). */
+    void tickMeters(bool micFlowing);
 
     /* Re-read the configured talkgroups and rebuild the button list. Call on
      * startup and after a settings change, never on a tick. */
@@ -77,6 +79,8 @@ private:
 
     float m_micVu = 0.0f;
     float m_spkVu = 0.0f;
+    StaleLevel m_micStale;
+    StaleLevel m_spkStale;
 };
 
 #endif
