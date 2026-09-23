@@ -22,6 +22,16 @@ constexpr int kSessionLimit   = 60;
 constexpr int kSnapshotMs     = 5000;
 constexpr int kReconnectMs    = 15000;
 
+/* Liveness. A path that silently drops the TCP flow — and the path to this
+ * user's reflector dropped the core's own connection 45 times in 33 hours —
+ * leaves a WebSocket "connected" with no disconnected() for as long as the
+ * kernel's keepalive allows, which by default is over two hours and only if
+ * it is switched on. The map and the activity list then show a frozen world:
+ * a station that was talking stays talking. So ping every 30 s, and treat
+ * 45 s with neither a message nor a pong as a dead connection. */
+constexpr int kPingMs         = 30000;
+constexpr int kSilenceMs      = 45000;
+
 /* Every accessor below is lenient on purpose: portal versions disagree about
  * whether a talkgroup is a number or a string, and a client that insists on
  * one of them shows an empty map against the other. */
@@ -108,6 +118,40 @@ ReflectorFeed::ReflectorFeed(QObject *parent) : QObject(parent)
     m_reconnect->setSingleShot(true);
     m_reconnect->setInterval(kReconnectMs);
     connect(m_reconnect, &QTimer::timeout, this, [this]() { connectNow(); });
+
+    m_ping = new QTimer(this);
+    m_ping->setInterval(kPingMs);
+    connect(m_ping, &QTimer::timeout, this, [this]() {
+        if (m_socket)
+            m_socket->ping();
+    });
+
+    m_silence = new QTimer(this);
+    m_silence->setSingleShot(true);
+    m_silence->setInterval(kSilenceMs);
+    connect(m_silence, &QTimer::timeout, this, [this]() {
+        log_info("reflector feed: nothing from %s for %d s — reconnecting",
+                 qPrintable(m_url.toString()), m_silence->interval() / 1000);
+        markUnavailable();
+        teardown();
+        connectNow();
+    });
+}
+
+void ReflectorFeed::setIntervals(int reconnectMs, int pingMs, int silenceMs)
+{
+    m_reconnect->setInterval(reconnectMs);
+    m_ping->setInterval(pingMs);
+    m_silence->setInterval(silenceMs);
+}
+
+void ReflectorFeed::openUrl(const QUrl &url)
+{
+    m_host = url.host();
+    m_url  = url;
+    teardown();
+    markUnavailable();
+    connectNow();
 }
 
 ReflectorFeed::~ReflectorFeed()
@@ -182,19 +226,25 @@ void ReflectorFeed::connectNow()
     if (!m_enabled || !m_url.isValid())
         return;
 
+    /* A reconnect that was pending belongs to the socket being replaced. Left
+     * running, it fired 15 s after an explicit connect (a setting toggled, the
+     * reflector changed) and tore the healthy new socket down again. */
+    m_reconnect->stop();
     teardown();
 
     m_gotSnapshot = false;
     m_socket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
 
     connect(m_socket, &QWebSocket::textMessageReceived, this, [this](const QString &text) {
-        if (handleJson(text.toUtf8()))
-            m_snapshot->stop();
+        onMessage(text.toUtf8());
     });
     /* Some portals send the same JSON as a binary frame. */
     connect(m_socket, &QWebSocket::binaryMessageReceived, this, [this](const QByteArray &data) {
-        if (handleJson(data))
-            m_snapshot->stop();
+        onMessage(data);
+    });
+    connect(m_socket, &QWebSocket::pong, this, [this]() {
+        if (m_gotSnapshot)
+            m_silence->start();
     });
 
     connect(m_socket, &QWebSocket::disconnected, this, [this]() {
@@ -218,9 +268,22 @@ void ReflectorFeed::connectNow()
     m_snapshot->start();
 }
 
+void ReflectorFeed::onMessage(const QByteArray &data)
+{
+    if (handleJson(data)) {
+        m_snapshot->stop();
+        /* Watched from the snapshot on: before it, the 5 s probe decides. */
+        m_ping->start();
+    }
+    if (m_gotSnapshot)
+        m_silence->start();
+}
+
 void ReflectorFeed::teardown()
 {
     m_snapshot->stop();
+    m_ping->stop();
+    m_silence->stop();
     if (!m_socket)
         return;
 

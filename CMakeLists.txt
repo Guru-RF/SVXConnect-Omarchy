@@ -306,6 +306,14 @@ target_compile_definitions(test_qrzasync PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_qrzasync PRIVATE svxcore Qt6::Core Qt6::Sql)
 add_test(NAME qrzasync COMMAND test_qrzasync)
 
+add_executable(test_feedliveness
+    tests/test_feedliveness.cpp
+    src/net/reflectorfeed.cpp)
+target_include_directories(test_feedliveness PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_feedliveness PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_feedliveness PRIVATE svxcore Qt6::Core Qt6::Network Qt6::WebSockets)
+add_test(NAME feedliveness COMMAND test_feedliveness)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
