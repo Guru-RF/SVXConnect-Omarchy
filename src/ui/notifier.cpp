@@ -5,8 +5,9 @@
 
 #include <QCoreApplication>
 #include <QDBusConnection>
-#include <QDBusInterface>
-#include <QDBusReply>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QSettings>
 #include <QStringList>
 #include <QVariantMap>
@@ -20,6 +21,10 @@ constexpr char kSetting[] = "notify/talkers";
 const char *kService = "org.freedesktop.Notifications";
 const char *kPath    = "/org/freedesktop/Notifications";
 const char *kIface   = "org.freedesktop.Notifications";
+
+/* A daemon that has not answered in this long is not going to show the card
+ * in time to matter. */
+constexpr int kNotifyTimeoutMs = 5000;
 
 /* The callsign as configured, stripped of an SSID, for comparison with a
  * talker's already-stripped `call`. */
@@ -123,23 +128,34 @@ void Notifier::announceTalkers(const QStringList &names, quint32 tg, int extra)
     hints.insert(QStringLiteral("desktop-entry"), QStringLiteral("SVXConnect"));
     hints.insert(QStringLiteral("category"), QStringLiteral("im.received"));
 
-    QDBusInterface notifications(QLatin1String(kService), QLatin1String(kPath),
-                                 QLatin1String(kIface), bus);
-    const QDBusReply<uint> reply = notifications.call(
-        QStringLiteral("Notify"),
-        QStringLiteral("SVXConnect"),
-        m_lastId,                                   /* replace our previous card */
-        QStringLiteral("SVXConnect"),               /* icon, by desktop file name */
-        summary,
-        body,
-        QStringList{QStringLiteral("default"), tr("Open")},
-        hints,
-        8000);
+    /* ASYNCHRONOUS. A blocking call waits up to QtDBus's 25 s default for a
+     * notification daemon that is slow, hung or restarting — on the GUI
+     * thread, which is also the thread that runs the core: no audio in or out,
+     * no heartbeats, for as long as the shell takes to draw a card. The id is
+     * only needed to replace this card with the next, so it can arrive when
+     * it arrives. */
+    QDBusMessage call = QDBusMessage::createMethodCall(
+        QLatin1String(kService), QLatin1String(kPath), QLatin1String(kIface),
+        QStringLiteral("Notify"));
+    call << QStringLiteral("SVXConnect")
+         << m_lastId                                /* replace our previous card */
+         << QStringLiteral("SVXConnect")            /* icon, by desktop file name */
+         << summary
+         << body
+         << QStringList{QStringLiteral("default"), tr("Open")}
+         << hints
+         << 8000;
 
-    if (reply.isValid())
-        m_lastId = reply.value();
-    else
-        log_warn("notify: %s", qPrintable(reply.error().message()));
+    auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(call, kNotifyTimeoutMs), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this](QDBusPendingCallWatcher *w) {
+                w->deleteLater();
+                const QDBusPendingReply<uint> reply = *w;
+                if (reply.isValid())
+                    m_lastId = reply.value();
+                else
+                    log_warn("notify: %s", qPrintable(reply.error().message()));
+            });
 }
 
 void Notifier::onActionInvoked(uint id, const QString &actionKey)

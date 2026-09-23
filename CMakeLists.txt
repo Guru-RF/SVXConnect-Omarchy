@@ -273,6 +273,13 @@ target_compile_definitions(test_trayicon PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_trayicon PRIVATE svxcore Qt6::Widgets Qt6::Svg)
 add_test(NAME trayicon COMMAND test_trayicon)
 
+add_executable(test_notifierbus
+    tests/test_notifierbus.cpp
+    src/ui/notifier.cpp)
+target_include_directories(test_notifierbus PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(test_notifierbus PRIVATE svxcore Qt6::Core Qt6::DBus)
+add_test(NAME notifierbus COMMAND test_notifierbus)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
