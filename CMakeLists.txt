@@ -298,6 +298,14 @@ target_compile_definitions(test_hyprctlasync PRIVATE QT_NO_CAST_FROM_ASCII)
 target_link_libraries(test_hyprctlasync PRIVATE svxcore Qt6::Core)
 add_test(NAME hyprctlasync COMMAND test_hyprctlasync)
 
+add_executable(test_qrzasync
+    tests/test_qrzasync.cpp
+    src/net/qrzlookup.cpp)
+target_include_directories(test_qrzasync PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_qrzasync PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_qrzasync PRIVATE svxcore Qt6::Core Qt6::Sql)
+add_test(NAME qrzasync COMMAND test_qrzasync)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------

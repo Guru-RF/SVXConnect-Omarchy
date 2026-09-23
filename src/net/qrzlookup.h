@@ -39,6 +39,9 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QThreadPool>
+
+#include <functional>
 
 class QrzLookup : public QObject {
     Q_OBJECT
@@ -64,6 +67,14 @@ public:
     };
 
     explicit QrzLookup(QObject *parent = nullptr);
+
+    /* Waits for a cache read still in flight: they are bounded by a 100 ms
+     * busy timeout, and each posts its answer back to this object. */
+    ~QrzLookup() override;
+
+    /* How long `qrz` may run before it is killed and the lookup answered
+     * with nothing. Ten seconds; the tests shorten it. */
+    void setTimeoutMs(int ms) { m_timeoutMs = ms; }
 
     /* True when ham-tools is installed and configured. Everything else here is
      * a no-op when this is false. */
@@ -97,8 +108,16 @@ signals:
     void resolved(const QString &homeCall, const QrzLookup::Record &record);
 
 private:
-    bool readCache(const QString &homeCall, Record *out) const;
+    /* ham-tools' SQLite file, read on a pool thread: it belongs to another
+     * program that may be writing it, and a locked database used to cost the
+     * GUI thread — and the core it runs — QSQLITE's default 5 s busy wait.
+     * `then` runs on this object's thread. */
+    static bool readCache(const QString &path, const QString &homeCall, Record *out);
+    void readCacheAsync(const QString &homeCall, std::function<void(bool, const Record &)> then);
     void runQrz(const QString &homeCall);
+
+    QThreadPool m_pool;
+    int         m_timeoutMs = 10000;
 
     /* One lookup per station at a time, and a short memory for the ones QRZ
      * does not know: a map full of repeaters would otherwise spawn the same
