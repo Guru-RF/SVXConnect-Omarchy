@@ -937,54 +937,41 @@ void MainWindow::sampleAudioHealth()
 
 void MainWindow::onMicStalled()
 {
-    /* Keyed for kStallMs and not one frame left: the capture stream is up as
-     * far as the audio system is concerned and delivers nothing. 0.1.13 sat in
-     * exactly this state showing TRANSMITTING until the operator restarted.
+    /* Keyed for kStallMs and not one datagram left the machine. 0.1.13 sat in
+     * this state showing TRANSMITTING until the operator restarted.
      *
-     * Un-key, so the display, the reflector and the operator agree nothing is
-     * on the air; then reopen the input device, which is what the restart
-     * cured — the same call Preferences makes, and safe outside app_service().
-     * Copy the name first: app_set_input_device() writes it back into the very
-     * buffer it would otherwise be reading from. */
-    log_err("TX: keyed for %lld ms and nothing was sent — the microphone delivers no "
-            "audio; un-keying and reopening the input device",
+     * Recovering the DEVICE is the core's job now: it watches the capture
+     * callback itself, reopens a microphone that stops delivering within half
+     * a second, and when that fails it un-keys and raises "MIC STALLED" on the
+     * banner this window already shows. So when this fires, the core has seen
+     * audio arrive and still nothing was sent — the microphone is not the
+     * problem, and reopening it would be the wrong remedy and a second
+     * recovery loop fighting the first. What this layer still owes the
+     * operator is the truth: un-key, so the display, the reflector and the
+     * person holding the key agree that nothing is on the air, and say so. */
+    log_err("TX: keyed for %lld ms and nothing was sent; un-keying",
             static_cast<long long>(m_txHealth.silentForMs()));
 
-    releaseMouseHold("the microphone delivered no audio");
-    m_pttManager->forceUnkey("the microphone delivered no audio");
+    releaseMouseHold("nothing was being transmitted");
+    m_pttManager->forceUnkey("nothing was being transmitted");
 
-    const QByteArray device(app_config(m_app)->input_device);
-    app_set_input_device(m_app, device.constData());
-
-    m_audioBanner->setText(tr("Nothing was transmitted: the microphone stopped delivering "
-                              "audio. SVXConnect un-keyed and reopened it — try again, and "
-                              "check the input device in Preferences if this repeats."));
+    m_audioBanner->setText(tr("Nothing was transmitted: the transmission was keyed but no "
+                              "audio left this machine, so SVXConnect un-keyed it. Try "
+                              "again; the log (Ctrl+L) says more if it repeats."));
     m_audioBanner->show();
 }
 
 void MainWindow::onPlaybackStalled()
 {
-    /* The jitter buffer has sat full for seconds: the playback callback is not
-     * draining it, so nothing you receive reaches the speaker. Reopening the
-     * output tears down the whole audio context (1-2 s) and closes the
-     * microphone with it, so never in the middle of an over. */
-    if (app_tx_active(m_app)) {
-        log_warn("audio: the speaker stopped playing; will reopen it after this over");
-        return;
-    }
-
-    log_err("audio: the output device stopped playing (%u ms buffered and not "
-            "draining); reopening it", app_jitter_ms(m_app));
-
-    const QByteArray device(app_config(m_app)->output_device);
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    app_set_output_device(m_app, device.constData());
-    QApplication::restoreOverrideCursor();
-
-    m_audioBanner->setText(tr("The speaker stopped playing what the reflector sends. "
-                              "SVXConnect reopened the output device; check it in "
-                              "Preferences if this repeats."));
-    m_audioBanner->show();
+    /* The jitter buffer has sat full for seconds. A playback callback that has
+     * STOPPED is the core's to detect and reopen (it counts the callbacks, a
+     * better signal than the buffer depth, and raises "SPEAKER STALLED" if a
+     * reopen does not help). A buffer that stays full while the callback runs
+     * is something else — clocks drifting apart, a sink that is too slow — and
+     * tearing the whole audio context down for it would cost more than it
+     * cures. Record it, so a report can be matched against the log. */
+    log_warn("audio: %u ms buffered and not draining for several seconds",
+             app_jitter_ms(m_app));
 }
 
 void MainWindow::refreshBanner()
