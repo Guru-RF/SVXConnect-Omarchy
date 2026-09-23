@@ -39,6 +39,8 @@
 #include <QDir>
 #include <QMetaType>
 
+#include <functional>
+
 /* The portal's a(sa{sv}) — an array of (shortcut id, properties) structs.
  *
  * QtDBus cannot marshal this on its own: it has no idea that the pair is a
@@ -57,6 +59,8 @@ QDBusArgument &operator<<(QDBusArgument &arg, const Shortcut &s);
 const QDBusArgument &operator>>(const QDBusArgument &arg, Shortcut &s);
 
 class QDBusServiceWatcher;
+class QDBusPendingCall;
+class QDBusMessage;
 
 class PortalBackend : public PttBackend {
     Q_OBJECT
@@ -109,8 +113,13 @@ private:
      * creating a new one — or the shortcut fires into nothing. */
     void subscribeSignals();
 
+    void createSession();
     void listShortcuts();
     void bindShortcut();
+
+    /* Run `then` with the reply once it arrives, on this thread. */
+    void whenAnswered(const QDBusPendingCall &call,
+                      std::function<void(const QDBusMessage &)> then);
 
     /* Our entry in a portal a(sa{sv}) reply. `found` says whether it was
      * listed at all; the returned trigger may still be empty. */
@@ -129,6 +138,7 @@ private:
     bool    m_subscribed = false;
     bool    m_hyprland = false;
     bool    m_down = false;        /* Activated seen, Deactivated not yet */
+    quint64 m_generation = 0;      /* bumped by stop(); stale replies compare */
     QString m_session;
     QString m_requested;
     QString m_active;

@@ -280,6 +280,16 @@ target_include_directories(test_notifierbus PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(test_notifierbus PRIVATE svxcore Qt6::Core Qt6::DBus)
 add_test(NAME notifierbus COMMAND test_notifierbus)
 
+add_executable(test_portalbus
+    tests/test_portalbus.cpp
+    src/ptt/pttbackend.h
+    src/ptt/portalbackend.cpp
+    src/ptt/hyprlandbinding.cpp)
+target_include_directories(test_portalbus PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_compile_definitions(test_portalbus PRIVATE QT_NO_CAST_FROM_ASCII)
+target_link_libraries(test_portalbus PRIVATE svxcore Qt6::Core Qt6::DBus)
+add_test(NAME portalbus COMMAND test_portalbus)
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
