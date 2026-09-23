@@ -382,6 +382,32 @@ updates as you watch.
 
 [nominatim]: https://nominatim.org/
 
+## When something stops working
+
+**The push-to-talk button only says TRANSMITTING while audio is actually
+leaving.** For the first moments of an over it says *KEYING…*; if the
+transmission is keyed but nothing is being sent, it turns yellow and says *NOT
+TRANSMITTING — NO MICROPHONE AUDIO*, and SVXConnect un-keys it rather than
+leaving you on the air with nothing going out.
+
+**A microphone or speaker that stops is reopened by itself.** Audio streams can
+start successfully and then deliver nothing (a PipeWire link that disappears is
+enough). The core notices within half a second on the microphone, a second on
+the speaker, reopens the device and carries on — no restart. If a reopen does
+not help, the banner says *MIC STALLED* or *SPEAKER STALLED*; check the device
+in Preferences → Audio.
+
+**The client certificate renews itself.** The reflector re-signs it once two
+thirds of its lifetime have passed and pushes the new one while you are
+connected; SVXConnect validates it and stores it next to the old key. Two weeks
+before it expires without having been renewed, the banner says so and what to
+do; an expired or refused certificate is replaced through a new request with
+the same key, which the reflector's sysop signs.
+
+**The reason a connection dropped is in the log** (`Ctrl+L`): the reflector's
+own error message when it sends one, or whether the link was closed, reset or
+went silent.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
