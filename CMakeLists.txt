@@ -15,7 +15,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(svxconnect-omarchy
-    VERSION 0.1.14
+    VERSION 0.1.15
     DESCRIPTION "SvxLink reflector client for Omarchy"
     HOMEPAGE_URL "https://svxconnect.app"
     LANGUAGES C CXX)

@@ -30,7 +30,10 @@ same reflector core, the same configuration. Two things are new:
 - **Only one client may be connected at a time.** A certificate and node id can't
   be used twice at once. So the CLI, the headless service and the desktop
   clients all take a shared run lock, and one that starts while another holds
-  the lock refuses and names who has it.
+  the lock refuses and names who has it. `svxconnect --enroll` takes it too
+  when it logs in to check a certificate, so quit this app first to check one
+  from the terminal — or leave it running: it checks the certificate on every
+  login and replaces one the reflector refuses by itself.
 
 ## Following the Omarchy theme
 
